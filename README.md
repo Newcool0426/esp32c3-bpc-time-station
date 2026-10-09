@@ -91,10 +91,12 @@ powershell -ExecutionPolicy Bypass -File tools\flash.ps1
 
 脚本会自动：
 
-1. 从 `latest` Release 下载 `bpc-time-station.bin`；
+1. 从 `latest` Release 下载 `bpc-time-station.bin`（走 `api.github.com`，即使 `github.com` 直连受限也可用）；
 2. 读取 `version.txt`，把固件**重命名**为 `firmware/bpc-time-station-<版本>.bin`；
 3. 自动安装 esptool（如缺失）；
 4. 自动探测串口，刷写到 `0x0` 并复位设备。
+
+> 本地只需 Python + esptool 用于**刷写**，不需要任何编译工具链。
 
 常用参数：
 

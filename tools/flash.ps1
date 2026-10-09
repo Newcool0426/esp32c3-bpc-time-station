@@ -1,29 +1,37 @@
 <#
 .SYNOPSIS
-    一键下载并刷写 ESP32-C3 BPC 授时站固件。
+    One-click download + rename + flash of the ESP32-C3 BPC time-station firmware.
 
 .DESCRIPTION
-    从 GitHub 的 "latest" Release 下载最新固件，按版本号重命名后
-    用 esptool 刷入设备。可自动探测串口。
+    Downloads the newest firmware from the GitHub "latest" release, renames it
+    with its version, then flashes it with esptool. The serial port is
+    auto-detected.
+
+    Release assets are fetched through the GitHub REST API (api.github.com)
+    instead of github.com/releases/download, so it also works on networks
+    where the github.com host is slow or blocked.
+
+    This script is intentionally ASCII-only so it parses correctly under
+    Windows PowerShell 5.1 regardless of the system codepage.
 
 .PARAMETER Repo
-    GitHub 仓库，格式 owner/name。默认从 git remote origin 推断。
+    GitHub repository as owner/name. Defaults to the "origin" git remote.
 
 .PARAMETER Port
-    串口，如 COM5。省略时自动探测。
+    Serial port such as COM5. Auto-detected when omitted.
 
 .PARAMETER Token
-    私有仓库所需的 GitHub Token。公有仓库可省略；
-    也可通过环境变量 GITHUB_TOKEN 提供。
+    GitHub token for private repositories. Public repos do not need it.
+    Can also be supplied via the GITHUB_TOKEN environment variable.
 
 .PARAMETER OutDir
-    固件保存目录，默认 firmware。
+    Directory to save the firmware into. Default: firmware
 
 .PARAMETER Baud
-    下载波特率，默认 921600。
+    Download baud rate. Default: 921600
 
 .PARAMETER NoFlash
-    只下载不刷写。
+    Download only, do not flash.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\flash.ps1
@@ -54,24 +62,52 @@ function Get-RepoFromGit {
 }
 
 if (-not $Repo) { $Repo = Get-RepoFromGit }
-if (-not $Repo) { throw "无法确定仓库，请用 -Repo owner/name 指定。" }
-Write-Host "Repo : $Repo" -ForegroundColor Cyan
+if (-not $Repo) { throw "Cannot determine repository. Pass -Repo owner/name." }
+Write-Host "Repo    : $Repo" -ForegroundColor Cyan
 
-$headers = @{ "User-Agent" = "esp32c3-bpc-flash" ; "Accept" = "application/vnd.github+json" }
-if ($Token) { $headers["Authorization"] = "Bearer $Token" }
-
+$jsonHeaders = @{ "User-Agent" = "esp32c3-bpc-flash"; "Accept" = "application/vnd.github+json" }
+if ($Token) { $jsonHeaders["Authorization"] = "Bearer $Token" }
 $apiBase = "https://api.github.com/repos/$Repo"
-Write-Host "查询最新 Release ..."
-$release = Invoke-RestMethod -Headers $headers -Uri "$apiBase/releases/latest"
 
+# Download a release asset through the API (works even if github.com is blocked).
+function Save-ReleaseAsset([object]$asset, [string]$dest) {
+    $assetApi = "$apiBase/releases/assets/$($asset.id)"
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        $a = @("-sSL", "--fail", "-o", $dest,
+               "-H", "Accept: application/octet-stream",
+               "-H", "User-Agent: esp32c3-bpc-flash")
+        if ($Token) { $a += @("-H", "Authorization: Bearer $Token") }
+        $a += $assetApi
+        & curl.exe @a
+        if ($LASTEXITCODE -ne 0) { throw "Failed to download $($asset.name)." }
+    } else {
+        $h = @{ "User-Agent" = "esp32c3-bpc-flash"; "Accept" = "application/octet-stream" }
+        if ($Token) { $h["Authorization"] = "Bearer $Token" }
+        Invoke-WebRequest -Headers $h -Uri $assetApi -OutFile $dest
+    }
+}
+
+function Get-ReleaseAssetString([object]$asset) {
+    $tmp = [IO.Path]::Combine($env:TEMP, [IO.Path]::GetRandomFileName())
+    try {
+        Save-ReleaseAsset $asset $tmp
+        return (Get-Content -Raw $tmp)
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "Querying latest release ..."
+$release  = Invoke-RestMethod -Headers $jsonHeaders -Uri "$apiBase/releases/latest"
 $fwAsset  = $release.assets | Where-Object { $_.name -eq "bpc-time-station.bin" }
-if (-not $fwAsset) { throw "在最新 Release($($release.tag_name)) 中找不到 bpc-time-station.bin。" }
+if (-not $fwAsset) { throw "bpc-time-station.bin not found in latest release ($($release.tag_name))." }
 
-$version = $release.tag_name
+$version  = $release.tag_name
 $verAsset = $release.assets | Where-Object { $_.name -eq "version.txt" }
 if ($verAsset) {
     try {
-        $txt = (Invoke-RestMethod -Headers $headers -Uri $verAsset.browser_download_url) -join "`n"
+        $txt = Get-ReleaseAssetString $verAsset
         if ($txt -match 'version=([^\r\n]+)') { $version = $Matches[1].Trim() }
     } catch { }
 }
@@ -80,21 +116,21 @@ Write-Host "Version : $version" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $target = Join-Path $OutDir "bpc-time-station-$version.bin"
 
-Write-Host "下载固件：$($fwAsset.browser_download_url)"
-Invoke-WebRequest -Headers $headers -Uri $fwAsset.browser_download_url -OutFile $target
+Write-Host "Downloading asset id $($fwAsset.id) ..."
+Save-ReleaseAsset $fwAsset $target
 $size = [math]::Round((Get-Item $target).Length / 1KB, 1)
-Write-Host "已保存：$target ($size KB)" -ForegroundColor Green
+Write-Host "Saved   : $target ($size KB)" -ForegroundColor Green
 
-if ($NoFlash) { Write-Host "-NoFlash：仅下载，结束。"; return }
+if ($NoFlash) { Write-Host "-NoFlash set: download only, done."; return }
 
-# ---- 确保 esptool 可用 ------------------------------------------------------
+# ---- ensure esptool ---------------------------------------------------------
 python -c "import esptool" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "安装 esptool ..."
+    Write-Host "Installing esptool ..."
     python -m pip install --upgrade esptool
 }
 
-# ---- 探测串口 ----------------------------------------------------------------
+# ---- auto-detect serial port ------------------------------------------------
 if (-not $Port) {
     $ports = Get-CimInstance Win32_PnPEntity |
         Where-Object { $_.Name -match '\((COM\d+)\)' } |
@@ -105,15 +141,15 @@ if (-not $Port) {
     $pick = $ports | Where-Object { $_.Name -match 'USB|CP210|CH34|Silicon|JTAG|Serial' } |
             Select-Object -First 1
     if (-not $pick) { $pick = $ports | Select-Object -First 1 }
-    if (-not $pick) { throw "未找到串口，请用 -Port COMx 指定。" }
+    if (-not $pick) { throw "No serial port found. Pass -Port COMx." }
     $Port = $pick.Port
-    Write-Host "自动探测串口：$Port ($($pick.Name))" -ForegroundColor Cyan
+    Write-Host "Port    : $Port ($($pick.Name))" -ForegroundColor Cyan
 }
 
-Write-Host "刷写 $target -> $Port ..." -ForegroundColor Yellow
+Write-Host "Flashing $target -> $Port ..." -ForegroundColor Yellow
 python -m esptool --chip esp32c3 --port $Port --baud $Baud `
     --before default_reset --after hard_reset `
     write_flash -z 0x0 $target
 
-if ($LASTEXITCODE -ne 0) { throw "刷写失败 (esptool 退出码 $LASTEXITCODE)。" }
-Write-Host "完成！设备将自动重启并开始授时。" -ForegroundColor Green
+if ($LASTEXITCODE -ne 0) { throw "Flashing failed (esptool exit code $LASTEXITCODE)." }
+Write-Host "Done. The device reboots and starts broadcasting." -ForegroundColor Green
