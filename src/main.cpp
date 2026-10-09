@@ -71,6 +71,9 @@ static uint8_t  g_pulseIdx   = 0;
 static char     g_toast[16]  = {0};
 static uint32_t g_toastUntil = 0;
 
+static struct tm pendingTm;              /* 负脉冲结束后再刷新的时间 */
+static bool      pendingRender = false;
+
 /* ------------------------------------------------------------- 前向声明 -- */
 static void maintainNet(uint32_t nowMs);
 static void maintainButton(uint32_t nowMs);
@@ -93,8 +96,10 @@ static inline void ledWrite(bool on)
 static void carrierInit()
 {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcSetClockSource(LEDC_USE_APB_CLK);   /* 80MHz，68.5kHz 最接近 */
     ledcAttachChannel(BPC_PIN, BPC_FREQ_HZ, 8, BPC_LEDC_CHANNEL);
 #else
+    ledcSetClockSource(LEDC_USE_APB_CLK);
     ledcSetup(BPC_LEDC_CHANNEL, BPC_FREQ_HZ, 8);
     ledcAttachPin(BPC_PIN, BPC_LEDC_CHANNEL);
 #endif
@@ -550,19 +555,25 @@ static void signalTick()
             carrierPulse();                 /* 整秒开始处的负脉冲（降幅） */
             carrierOff = true;
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
+            pendingTm = t;                  /* 屏幕刷新延后到脉冲结束，避免影响脉冲宽度 */
+            pendingRender = true;
+        } else {
+            renderClock(&t);                /* 本秒无间隙，直接刷新 */
         }
 
         /* 每秒一个 LED 脉冲，指示"正在授时" */
         ledPulseOn = true;
         ledPulseEnd = millis() + 40;
         ledWrite(true);
-
-        renderClock(&t);
     }
 
     if (carrierOff && (int32_t)(nowUs - offUntilUs) >= 0) {
         carrierOn();
         carrierOff = false;
+        if (pendingRender) {
+            pendingRender = false;
+            renderClock(&pendingTm);
+        }
     }
 }
 
