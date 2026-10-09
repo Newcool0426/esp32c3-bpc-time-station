@@ -206,7 +206,6 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
     Serial.printf("[portal] softAP(\"%s\")=%d ip=%s mac=%s\n",
                   ap, (int)apOk, ip.toString().c_str(),
                   WiFi.softAPmacAddress().c_str());
-    Serial.flush();
 
     uint32_t start = millis();
     uint32_t lastDisp = 0;
@@ -229,7 +228,6 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
         if (millis() - lastLog > 3000) {
             lastLog = millis();
             Serial.printf("[portal] waiting... clients=%d\n", WiFi.softAPgetStationNum());
-            Serial.flush();
         }
         delay(2);
     }

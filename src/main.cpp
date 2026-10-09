@@ -178,24 +178,26 @@ void setup()
     delay(100);
     Serial.println();
     Serial.println("=== ESP32-C3 BPC 68.5kHz 授时站 ===");
-    Serial.flush();
 
     /* OLED */
+    Serial.printf("[init] oled: Wire.begin(SDA=%d,SCL=%d)...\n", OLED_SDA, OLED_SCL);
     Wire.begin(OLED_SDA, OLED_SCL);
-    Wire.setClock(400000);
+    Wire.setTimeOut(50);
+    Wire.setClock(100000);
+    Serial.println("[init] oled: u8g2.begin...");
     u8g2.setI2CAddress(OLED_ADDR << 1);
     u8g2.begin();
-    u8g2.setBusClock(400000);
+    u8g2.setBusClock(100000);
     u8g2.setFontMode(1);
     u8g2.setFontPosBaseline();
+    Serial.println("[init] oled: first draw...");
     drawStatusScreen("ESP32-C3", "BPC TX", "68.5 kHz");
-    Serial.printf("[init] OLED ready (SDA=%d SCL=%d addr=0x%02X)\n", OLED_SDA, OLED_SCL, OLED_ADDR);
+    Serial.println("[init] oled: ready");
 
     /* 载波：先静默，等时间有效后再开启 */
     carrierInit();
     carrierSilent();
     Serial.printf("[init] BPC carrier %d Hz on GPIO%d\n", BPC_FREQ_HZ, BPC_PIN);
-    Serial.flush();
 
     /* Wi-Fi 配网 */
     wifiProvisionSetDisplay(provisionDisplay);
@@ -234,7 +236,6 @@ void setup()
     uint32_t now = millis();
     lastWifiTry = lastNtpMs = lastHouseMs = now;
     Serial.println("[init] setup complete");
-    Serial.flush();
 }
 
 /* ================================================================ loop === */
