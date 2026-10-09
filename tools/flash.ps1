@@ -196,22 +196,31 @@ if (-not $Port) {
     Write-Host "Port    : $Port ($($pick.Name))" -ForegroundColor Cyan
 }
 
-if ($incremental) {
-    Write-Host "Flashing (incremental, keeps NVS/Wi-Fi config) -> $Port ..." -ForegroundColor Yellow
-    & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
-        --before default_reset --after hard_reset `
-        write_flash -z `
-        0x0     $bootPath `
-        0x8000  $partsPath `
-        0xe000  $otaPath `
-        0x10000 $appPath 2>&1
-} else {
-    Write-Host "Flashing FULL merged image (ERASES NVS/Wi-Fi config) -> $Port ..." -ForegroundColor Yellow
-    & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
-        --before default_reset --after hard_reset `
-        write_flash -z 0x0 $fullPath 2>&1
+$attempts = 3
+$flashCode = 1
+for ($try = 1; $try -le $attempts; $try++) {
+    if ($incremental) {
+        Write-Host ("Flashing (incremental, keeps NVS/Wi-Fi config) -> {0}  [attempt {1}/{2}]" -f $Port, $try, $attempts) -ForegroundColor Yellow
+        & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
+            --before default_reset --after hard_reset `
+            write_flash -z `
+            0x0     $bootPath `
+            0x8000  $partsPath `
+            0xe000  $otaPath `
+            0x10000 $appPath 2>&1
+    } else {
+        Write-Host ("Flashing FULL merged image (ERASES NVS/Wi-Fi config) -> {0}  [attempt {1}/{2}]" -f $Port, $try, $attempts) -ForegroundColor Yellow
+        & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
+            --before default_reset --after hard_reset `
+            write_flash -z 0x0 $fullPath 2>&1
+    }
+    $flashCode = $LASTEXITCODE
+    if ($flashCode -eq 0) { break }
+    if ($try -lt $attempts) {
+        Write-Host "Flash failed (transient serial error?), retrying ..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+    }
 }
-$flashCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEA
 
 if ($flashCode -ne 0) { throw "Flashing failed (esptool exit code $flashCode)." }
