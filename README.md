@@ -1,0 +1,162 @@
+# ESP32-C3 BPC 68.5 kHz 授时站
+
+基于 **ESP32-C3 + 0.42" OLED** 的 **BPC（中国国家标准低频时码，68.5 kHz）授时信号发射站**。
+
+设备通过 Wi-Fi 从 NTP 获取精确时间，在 **GPIO0** 上产生 68.5 kHz 载波并经磁耦合线圈天线发射符合 BPC 格式的时间码；OLED 用点阵字体显示 **时:分:秒**，板载 LED 指示授时状态。
+
+> ⚠️ **免责声明**：本项目仅供实验、学习与近场测试使用。请使用小尺寸线圈天线、保持极低发射功率，并遵守当地无线电管理法规，**不得**连接大尺寸天线或进行远距离发射。
+
+---
+
+## 功能特性
+
+| 功能 | 说明 |
+| --- | --- |
+| 授时信号 | BPC 68.5 kHz，20 秒一帧，四进制符号（100/200/300/400 ms 载波关断） |
+| 天线输出 | GPIO0，经串联电阻驱动磁耦合线圈 |
+| 时间同步 | Wi-Fi STA + NTP（阿里 / 腾讯 / cn.pool），中国标准时间 UTC+8 |
+| 显示 | 0.42" OLED，SSD1306 128×64 显存、可见 72×40、偏移 (30,12)，点阵字体显示时:分:秒 |
+| 状态指示 | 板载 LED（GPIO8，低电平点亮） |
+| 强制对时 | 长按 BOOT 键（GPIO9）1 秒 |
+| 云端编译 | GitHub Actions 自动编译并发布，本地无需安装工具链 |
+
+---
+
+## 硬件
+
+| 项目 | 引脚 | 备注 |
+| --- | --- | --- |
+| BPC 天线输出 | **GPIO0** | 串 330 Ω（≥330Ω）后接线圈，线圈另一端接 GND |
+| 板载 LED | GPIO8 | 低电平点亮 |
+| BOOT 按键 | GPIO9 | 长按 1s 强制重新对时 |
+| OLED SDA | GPIO5 | I2C，地址 0x3C |
+| OLED SCL | GPIO6 | I2C，400 kHz |
+
+### 天线接法
+
+```
+GPIO0 ──[ 330 Ω ]──( 线圈 ~20 圈 )── GND
+```
+
+使用 0.3 mm 漆包线绕约 20 圈，直径与到电波表的距离相当即可；将电波表放在约 20 cm 以内对时成功率最高。
+
+---
+
+## 编译（不在本地编译）
+
+固件在 **GitHub Actions** 上编译。把本仓库推到 GitHub 后，会触发 `.github/workflows/build.yml`：
+
+1. 安装 PlatformIO 与 esptool；
+2. 用仓库 Secrets 生成 `include/secrets.h`；
+3. `pio run -e esp32-c3` 编译；
+4. 合并 bootloader + 分区表 + 应用为一个可从 `0x0` 刷写的镜像；
+5. 上传构建产物，并维护一个滚动的 **`latest` Release**（含固定名 `bpc-time-station.bin`）。
+
+### 配置 Wi-Fi（仓库 Secrets）
+
+在 **Settings → Secrets and variables → Actions** 添加：
+
+| Secret | 说明 |
+| --- | --- |
+| `WIFI_SSID` | Wi-Fi 名称 |
+| `WIFI_PASS` | Wi-Fi 密码 |
+
+未设置时固件仍可编译，但设备会一直闪灯表示未连接。修改后重新运行工作流即可。
+
+> 也可直接编辑 `include/secrets.example.h` 为 `include/secrets.h` 填入凭据——但云端编译使用的是上面两个 Secrets。
+
+---
+
+## 下载 + 重命名 + 刷写（一键）
+
+先在 GitHub 上把仓库变成"有 `latest` Release"（推一次代码即可）。
+
+Windows PowerShell：
+
+```powershell
+# 自动探测串口，下载最新固件并刷写
+powershell -ExecutionPolicy Bypass -File tools\flash.ps1
+```
+
+脚本会自动：
+
+1. 从 `latest` Release 下载 `bpc-time-station.bin`；
+2. 读取 `version.txt`，把固件**重命名**为 `firmware/bpc-time-station-<版本>.bin`；
+3. 自动安装 esptool（如缺失）；
+4. 自动探测串口，刷写到 `0x0` 并复位设备。
+
+常用参数：
+
+```powershell
+# 指定串口
+... -File tools\flash.ps1 -Port COM5
+# 私有仓库需要 Token
+... -File tools\flash.ps1 -Token ghp_xxx
+# 只下载不刷写
+... -File tools\flash.ps1 -NoFlash
+```
+
+若刷写时找不到设备，请按住 **BOOT** 键再插 USB 进入下载模式，然后指定 `-Port` 重试。
+
+---
+
+## LED 状态含义
+
+| LED | 含义 |
+| --- | --- |
+| 慢闪（约 0.35 s 周期） | 未连接 Wi-Fi |
+| 快闪（约 0.12 s 周期） | 已连 Wi-Fi，正在等待 NTP 对时 |
+| 每秒一次短脉冲 | **已授时**，正在发射 BPC 时间码 |
+
+---
+
+## OLED 显示
+
+```
+  BPC 68.5kHz      <- 载波频率
+   12:34:56        <- 点阵字体，时:分:秒
+    SYNC OK        <- WiFi ... / NTP ... / SYNC OK
+```
+
+---
+
+## 项目结构
+
+```
+platformio.ini                     PlatformIO 工程（GitHub Actions 使用）
+include/config.h                   硬件与运行参数
+include/bpc.h, src/bpc.cpp         BPC 时间码编码
+src/main.cpp                       主程序（Wi-Fi/NTP/OLED/LED/信号发生）
+include/secrets.example.h          Wi-Fi 凭据示例（复制为 secrets.h）
+.github/workflows/build.yml        云端编译 + 发布 Release
+tools/flash.ps1                    一键下载 + 重命名 + 刷写
+```
+
+---
+
+## 工作原理
+
+- **载波**：LEDC 在 GPIO0 产生 68.5 kHz、50% 占空比方波。
+- **时间码**：每 20 秒一帧。每整秒起始处把载波关断，关断时长表示一个四进制符号：
+
+  | 符号 | 关断时长 | 比特 |
+  | --- | --- | --- |
+  | 0 | 100 ms | 00 |
+  | 1 | 200 ms | 01 |
+  | 2 | 300 ms | 10 |
+  | 3 | 400 ms | 11 |
+
+  帧内依次编码：帧序号、时、分、星期、日、月、年以及 P1/P2 偶校验（详见 `src/bpc.cpp`）。
+- **对时**：`configTime()` 通过 NTP 写入系统时间，取 `gettimeofday()` 的整秒对齐发射。
+
+---
+
+## 参考资料
+
+- [BPC (time signal) — Wikipedia](https://en.wikipedia.org/wiki/BPC_(time_signal))
+- [bpcTransmitterEsp32](https://github.com/)（BPC 编码参考项目）
+- [dcfake77](https://github.com/luigicalligaris/dcfake77)（DCF77 发射实现，LEDC 载波思路参考）
+
+## 许可
+
+MIT License，详见 [LICENSE](LICENSE)。

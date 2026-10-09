@@ -1,0 +1,20 @@
+# PlatformIO
+.pio/
+.vscode/
+.pioenvs/
+.piolibdeps/
+
+# 本地生成的凭据
+include/secrets.h
+
+# 本地下载/刷写产物
+firmware/
+dist/
+
+# 参考资料（第三方代码，不纳入本仓库）
+reference/
+
+# 系统
+.DS_Store
+Thumbs.db
+*.log
