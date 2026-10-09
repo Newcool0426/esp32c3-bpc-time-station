@@ -52,7 +52,8 @@
 #define NTP_SERVER3         "cn.pool.ntp.org"
 #define TZ_OFFSET_SEC       (8 * 3600)        /* 中国标准时间 UTC+8 */
 #define DST_OFFSET_SEC      0
-#define NTP_RESYNC_MS       (6UL * 3600UL * 1000UL)
+#define NTP_POLL_MS         (1UL * 3600UL * 1000UL)   /* 自动 NTP 轮询：每 1 小时 */
+#define NTP_FORCE_MS        (2UL * 3600UL * 1000UL)   /* 强制重新对时：每 2 小时 */
 
 #define FW_NAME             "esp32c3-bpc-time-station"
 

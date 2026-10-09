@@ -50,7 +50,8 @@ static bool     ledPulseOn   = false; /* 每秒脉冲指示 */
 static uint32_t ledPulseEnd  = 0;
 
 static uint32_t lastWifiTry  = 0;
-static uint32_t lastNtpMs    = 0;
+static uint32_t lastNtpPollMs  = 0;
+static uint32_t lastNtpForceMs = 0;
 static uint32_t lastHouseMs  = 0;
 static uint32_t lastLogMs    = 0;
 static int      lastStatus   = -1;
@@ -172,7 +173,7 @@ static const DmGlyph DM_GLYPH_6 = {4, {0b1111,0b1000,0b1111,0b1001,0b1001,0b1111
 static const DmGlyph DM_GLYPH_7 = {4, {0b1111,0b0001,0b0010,0b0100,0b0100,0b0100}};
 static const DmGlyph DM_GLYPH_8 = {4, {0b1111,0b1001,0b1111,0b1001,0b1001,0b1111}};
 static const DmGlyph DM_GLYPH_9 = {4, {0b1111,0b1001,0b1001,0b1111,0b0001,0b1111}};
-static const DmGlyph DM_GLYPH_COLON = {1, {0,1,1,0,1,1}};
+static const DmGlyph DM_GLYPH_COLON = {1, {0,1,0,0,1,0}};   /* 两个独立的方点 */
 
 static const DmGlyph* dmGlyph(char c)
 {
@@ -325,7 +326,8 @@ void setup()
     }
 
     uint32_t now = millis();
-    lastWifiTry = lastNtpMs = lastHouseMs = now;
+    lastWifiTry = lastHouseMs = now;
+    lastNtpPollMs = lastNtpForceMs = now;
     Serial.println("[init] setup complete");
 }
 
@@ -378,7 +380,7 @@ static void maintainNet(uint32_t nowMs)
             Serial.println(WiFi.localIP());
             configTime(TZ_OFFSET_SEC, DST_OFFSET_SEC,
                        NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-            lastNtpMs = nowMs;
+            lastNtpPollMs = lastNtpForceMs = nowMs;
         }
 
         if (!timeValid) {
@@ -392,11 +394,19 @@ static void maintainNet(uint32_t nowMs)
                               t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
                               t.tm_hour, t.tm_min, t.tm_sec);
             }
-        } else if ((uint32_t)(nowMs - lastNtpMs) > NTP_RESYNC_MS) {
+        } else if ((uint32_t)(nowMs - lastNtpForceMs) > NTP_FORCE_MS) {
+            /* 每 2 小时：强制重新对时（不重连 Wi-Fi） */
+            lastNtpForceMs = nowMs;
+            lastNtpPollMs  = nowMs;
             configTime(TZ_OFFSET_SEC, DST_OFFSET_SEC,
                        NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-            lastNtpMs = nowMs;
-            Serial.println("NTP periodic resync");
+            Serial.println("NTP force resync (2h)");
+        } else if ((uint32_t)(nowMs - lastNtpPollMs) > NTP_POLL_MS) {
+            /* 每 1 小时：自动轮询 */
+            lastNtpPollMs = nowMs;
+            configTime(TZ_OFFSET_SEC, DST_OFFSET_SEC,
+                       NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+            Serial.println("NTP poll (1h)");
         }
     } else {
         wifiUp = false;
@@ -427,7 +437,7 @@ static void maintainButton(uint32_t nowMs)
             Serial.println("BOOT 1s -> force NTP resync");
             configTime(TZ_OFFSET_SEC, DST_OFFSET_SEC,
                        NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-            lastNtpMs = nowMs;
+            lastNtpPollMs = lastNtpForceMs = nowMs;
         }
         /* 3s：清除 Wi-Fi 凭据并重启进入配网热点 */
         if (held > WIFI_RESET_HOLD_MS) {
