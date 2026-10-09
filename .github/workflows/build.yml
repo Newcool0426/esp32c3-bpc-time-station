@@ -61,16 +61,38 @@ jobs:
       - name: Build firmware
         run: pio run -e esp32-c3
 
-      # 合并为单个可从 0x0 刷写的镜像
+      # 合并为单个可从 0x0 刷写的镜像（优先使用 PlatformIO 自带的 esptool v4）
       - name: Merge flash image
         run: |
           cd .pio/build/esp32-c3
-          python -m esptool --chip esp32c3 merge_bin -o merged.bin \
-            --flash_mode dio --flash_freq 80m --flash_size 4MB \
-            0x0 bootloader.bin \
-            0x8000 partitions.bin \
-            0xe000 boot_app0.bin \
-            0x10000 firmware.bin
+
+          # 若构建目录没有 boot_app0.bin，从 framework 包中定位
+          if [ ! -f boot_app0.bin ]; then
+            BOOT_APP0="$(find "$HOME/.platformio" -name boot_app0.bin -print -quit)"
+            echo "boot_app0.bin -> $BOOT_APP0"
+            if [ -n "$BOOT_APP0" ]; then cp "$BOOT_APP0" boot_app0.bin; fi
+          fi
+          ls -l
+
+          ESPTOOL_PY="$(find "$HOME/.platformio/packages/tool-esptoolpy" -name esptool.py -print -quit)"
+          echo "esptool: ${ESPTOOL_PY:-python -m esptool}"
+
+          if [ -n "$ESPTOOL_PY" ]; then
+            python "$ESPTOOL_PY" --chip esp32c3 merge_bin -o merged.bin \
+              --flash_mode dio --flash_freq 80m --flash_size 4MB \
+              0x0 bootloader.bin \
+              0x8000 partitions.bin \
+              0xe000 boot_app0.bin \
+              0x10000 firmware.bin
+          else
+            python -m esptool --chip esp32c3 merge-bin -o merged.bin \
+              --flash-mode dio --flash-freq 80m --flash-size 4MB \
+              0x0 bootloader.bin \
+              0x8000 partitions.bin \
+              0xe000 boot_app0.bin \
+              0x10000 firmware.bin
+          fi
+
           ls -l merged.bin
 
       - name: Prepare release files
