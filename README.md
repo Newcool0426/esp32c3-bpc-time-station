@@ -211,7 +211,7 @@ tools/flash.ps1                    一键下载 + 重命名 + 刷写
 ## 参考资料
 
 - [BPC (time signal) — Wikipedia](https://en.wikipedia.org/wiki/BPC_(time_signal))
-- [bpcTransmitterEsp32](https://github.com/)（BPC 编码参考项目）
+- [bpcTransmitterEsp32](https://github.com/nehcgnem/bpcTransmitterEsp32)（BPC 编码参考项目）
 - [dcfake77](https://github.com/luigicalligaris/dcfake77)（DCF77 发射实现，LEDC 载波思路参考）
 
 ## 许可
