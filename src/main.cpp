@@ -150,20 +150,28 @@ static void provisionDisplay(const char* l1, const char* l2, const char* l3)
     drawStatusScreen(l1, l2, l3);
 }
 
-/* 点阵字体显示 时:分:秒 */
+/* 点阵字体，两行显示：第一行 时:分，第二行 秒；尽量占满 72x40 */
 static void renderClock(const struct tm* t)
 {
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d",
-             t->tm_hour, t->tm_min, t->tm_sec);
+    char hm[8];
+    char ss[4];
+    snprintf(hm, sizeof(hm), "%02d:%02d", t->tm_hour, t->tm_min);
+    snprintf(ss, sizeof(ss), "%02d", t->tm_sec);
 
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_4x6_tr);
-    centerStr(OLED_OFF_Y + 6, "BPC 68.5kHz");
-    u8g2.setFont(u8g2_font_7x13B_tr);
-    centerStr(OLED_OFF_Y + 24, buf);
-    u8g2.setFont(u8g2_font_4x6_tr);
-    centerStr(OLED_OFF_Y + 38, statusLine());
+    u8g2.setFont(u8g2_font_10x20_tr);   /* 内置最大号点阵位图字体 10x20 */
+
+    /* 用字体度量把两行垂直居中，占满可见高度 */
+    int a  = (int)u8g2.getAscent();
+    int d  = (int)u8g2.getDescent();
+    int lh = a + d;                      /* 行高 */
+    int top = OLED_OFF_Y + (OLED_H - 2 * lh) / 2;
+    if (top < OLED_OFF_Y) top = OLED_OFF_Y;
+    int y1 = top + a;                    /* 第一行基线：时:分 */
+    int y2 = y1 + lh;                    /* 第二行基线：秒 */
+
+    centerStr(y1, hm);
+    centerStr(y2, ss);
     u8g2.sendBuffer();
 }
 
