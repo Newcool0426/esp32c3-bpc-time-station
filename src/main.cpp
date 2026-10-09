@@ -28,6 +28,7 @@
 
 #include "config.h"
 #include "bpc.h"
+#include "wifi_provision.h"
 
 /* ---------------------------------------------------------------- OLED --- */
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(
@@ -53,11 +54,15 @@ static int      lastStatus   = -1;
 static bool     btnWasDown   = false;
 static uint32_t btnDownMs    = 0;
 
+static String   g_ssid;   /* 当前使用的 Wi-Fi 凭据 */
+static String   g_pass;
+
 /* ------------------------------------------------------------- 前向声明 -- */
 static void maintainNet(uint32_t nowMs);
 static void maintainButton(uint32_t nowMs);
 static void signalTick();
 static void updateLed(uint32_t nowMs);
+static void provisionDisplay(const char* l1, const char* l2, const char* l3);
 
 /* ---------------------------------------------------------------- LED ---- */
 static inline void ledWrite(bool on)
@@ -127,6 +132,20 @@ static void drawStatusScreen(const char* top, const char* mid, const char* botto
     u8g2.sendBuffer();
 }
 
+/* 配网/连接过程中的屏幕刷新（同时闪烁 LED 提示） */
+static void provisionDisplay(const char* l1, const char* l2, const char* l3)
+{
+    static uint32_t nextToggle = 0;
+    static bool     state      = false;
+    uint32_t nowMs = millis();
+    if ((int32_t)(nowMs - nextToggle) >= 0) {
+        state = !state;
+        ledWrite(state);
+        nextToggle = nowMs + 300;
+    }
+    drawStatusScreen(l1, l2, l3);
+}
+
 /* 点阵字体显示 时:分:秒 */
 static void renderClock(const struct tm* t)
 {
@@ -174,13 +193,37 @@ void setup()
     carrierSilent();
     Serial.printf("BPC carrier %d Hz on GPIO%d\n", BPC_FREQ_HZ, BPC_PIN);
 
-    /* Wi-Fi */
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.persistent(false);
-    Serial.printf("Connecting to WiFi SSID \"%s\" ...\n", WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    /* Wi-Fi 配网 */
+    wifiProvisionSetDisplay(provisionDisplay);
+
+    bool haveCreds = wifiProvisionLoad(g_ssid, g_pass);
+    if (!haveCreds) {
+        if (WIFI_SSID[0] && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
+            g_ssid = WIFI_SSID;
+            g_pass = WIFI_PASSWORD;
+            haveCreds = true;
+            Serial.println("Using build-time Wi-Fi credentials");
+        }
+    }
+
+    if (haveCreds) {
+        wifiProvisionConnect(g_ssid, g_pass, WIFI_CONNECT_TIMEOUT_MS);
+        /* 失败则由主循环持续重连；长按 BOOT 3 秒可清除并重新配网 */
+    } else {
+        Serial.println("No Wi-Fi credentials -> starting setup AP");
+        for (;;) {
+            String s, p;
+            if (wifiProvisionRunPortal(PORTAL_TIMEOUT_MS, s, p) &&
+                wifiProvisionConnect(s, p, WIFI_CONNECT_TIMEOUT_MS)) {
+                g_ssid = s;
+                g_pass = p;
+                break;
+            }
+            Serial.println("Setup portal timed out, restarting...");
+            delay(300);
+            ESP.restart();
+        }
+    }
 
     uint32_t now = millis();
     lastWifiTry = lastNtpMs = lastHouseMs = now;
@@ -255,7 +298,7 @@ static void maintainNet(uint32_t nowMs)
             (uint32_t)(nowMs - lastWifiTry) > 10000) {
             lastWifiTry = nowMs;
             Serial.println("WiFi reconnect...");
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            WiFi.begin(g_ssid.c_str(), g_pass.c_str());
         }
     }
 }
@@ -267,12 +310,23 @@ static void maintainButton(uint32_t nowMs)
     if (down) {
         if (btnDownMs == 0) {
             btnDownMs = nowMs;
-        } else if (!btnWasDown && (uint32_t)(nowMs - btnDownMs) > 1000) {
+        }
+        uint32_t held = (uint32_t)(nowMs - btnDownMs);
+
+        /* 1s：强制 NTP 重新对时 */
+        if (!btnWasDown && held > 1000) {
             btnWasDown = true;
-            Serial.println("BOOT held -> force NTP resync");
+            Serial.println("BOOT 1s -> force NTP resync");
             configTime(TZ_OFFSET_SEC, DST_OFFSET_SEC,
                        NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
             lastNtpMs = nowMs;
+        }
+        /* 3s：清除 Wi-Fi 凭据并重启进入配网热点 */
+        if (held > WIFI_RESET_HOLD_MS) {
+            Serial.println("BOOT 3s -> clearing Wi-Fi, restarting into setup AP");
+            wifiProvisionClear();
+            delay(200);
+            ESP.restart();
         }
     } else {
         btnDownMs = 0;

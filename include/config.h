@@ -55,3 +55,13 @@
 #define NTP_RESYNC_MS       (6UL * 3600UL * 1000UL)
 
 #define FW_NAME             "esp32c3-bpc-time-station"
+
+/* ---------- Wi-Fi 配网（热点 + 网页配置） ----------
+ * 首次上电若无已保存凭据，设备会开启一个开放热点，
+ * 手机/电脑连上后浏览器会自动弹出（或访问 192.168.4.1）
+ * 配置页面，填写要连接的 Wi-Fi 后即可自动连接。
+ */
+#define AP_SSID_PREFIX            "BPC-TimeStation"
+#define WIFI_CONNECT_TIMEOUT_MS   15000
+#define PORTAL_TIMEOUT_MS         (5UL * 60UL * 1000UL)
+#define WIFI_RESET_HOLD_MS        3000    /* 运行中长按 BOOT 3s 清除配网并重开热点 */

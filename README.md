@@ -15,6 +15,7 @@
 | 授时信号 | BPC 68.5 kHz，20 秒一帧，四进制符号（100/200/300/400 ms 载波关断） |
 | 天线输出 | GPIO0，经串联电阻驱动磁耦合线圈 |
 | 时间同步 | Wi-Fi STA + NTP（阿里 / 腾讯 / cn.pool），中国标准时间 UTC+8 |
+| 首次配网 | 无凭据时开启开放热点 `BPC-TimeStation-XXXX`，手机/电脑网页配置 Wi-Fi |
 | 显示 | 0.42" OLED，SSD1306 128×64 显存、可见 72×40、偏移 (30,12)，点阵字体显示时:分:秒 |
 | 状态指示 | 板载 LED（GPIO8，低电平点亮） |
 | 强制对时 | 长按 BOOT 键（GPIO9）1 秒 |
@@ -28,7 +29,7 @@
 | --- | --- | --- |
 | BPC 天线输出 | **GPIO0** | 串 330 Ω（≥330Ω）后接线圈，线圈另一端接 GND |
 | 板载 LED | GPIO8 | 低电平点亮 |
-| BOOT 按键 | GPIO9 | 长按 1s 强制重新对时 |
+| BOOT 按键 | GPIO9 | 长按 1s 重新对时；长按 3s 清除 Wi-Fi 并重开配网热点 |
 | OLED SDA | GPIO5 | I2C，地址 0x3C |
 | OLED SCL | GPIO6 | I2C，400 kHz |
 
@@ -52,7 +53,19 @@ GPIO0 ──[ 330 Ω ]──( 线圈 ~20 圈 )── GND
 4. 合并 bootloader + 分区表 + 应用为一个可从 `0x0` 刷写的镜像；
 5. 上传构建产物，并维护一个滚动的 **`latest` Release**（含固定名 `bpc-time-station.bin`）。
 
-### 配置 Wi-Fi（仓库 Secrets）
+### Wi-Fi 配网（两种方式）
+
+**方式一：设备热点配网（推荐，改 Wi-Fi 无需重新编译）**
+
+首次上电（或长按 BOOT 3 秒清除后）设备没有 Wi-Fi 凭据时，会开启一个**开放热点**：
+
+1. 手机 / 电脑连接热点 `BPC-TimeStation-XXXX`（XXXX 为芯片 ID）；
+2. 浏览器打开 `http://192.168.4.1`（多数手机会自动弹出配置页）；
+3. 选择 / 输入 2.4GHz Wi-Fi 名称与密码，点击“保存并连接”。
+
+凭据保存在设备 NVS 中，之后每次上电自动连接。运行中如需更换网络，长按 BOOT 键 3 秒，设备会清除凭据并重启进入配网热点。
+
+**方式二：编译时内置凭据（可选）**
 
 在 **Settings → Secrets and variables → Actions** 添加：
 
@@ -61,9 +74,7 @@ GPIO0 ──[ 330 Ω ]──( 线圈 ~20 圈 )── GND
 | `WIFI_SSID` | Wi-Fi 名称 |
 | `WIFI_PASS` | Wi-Fi 密码 |
 
-未设置时固件仍可编译，但设备会一直闪灯表示未连接。修改后重新运行工作流即可。
-
-> 也可直接编辑 `include/secrets.example.h` 为 `include/secrets.h` 填入凭据——但云端编译使用的是上面两个 Secrets。
+固件在没有 NVS 凭据时会使用它们直接连接；两者都没有则进入热点配网。
 
 ---
 
@@ -105,6 +116,7 @@ powershell -ExecutionPolicy Bypass -File tools\flash.ps1
 | LED | 含义 |
 | --- | --- |
 | 慢闪（约 0.35 s 周期） | 未连接 Wi-Fi |
+| 中速闪（约 0.3 s 周期） | 配网热点已开启，OLED 显示 `AP:...`，等待手机/电脑配置 |
 | 快闪（约 0.12 s 周期） | 已连 Wi-Fi，正在等待 NTP 对时 |
 | 每秒一次短脉冲 | **已授时**，正在发射 BPC 时间码 |
 
@@ -126,6 +138,7 @@ powershell -ExecutionPolicy Bypass -File tools\flash.ps1
 platformio.ini                     PlatformIO 工程（GitHub Actions 使用）
 include/config.h                   硬件与运行参数
 include/bpc.h, src/bpc.cpp         BPC 时间码编码
+include/wifi_provision.h, src/wifi_provision.cpp   热点 / 网页配网
 src/main.cpp                       主程序（Wi-Fi/NTP/OLED/LED/信号发生）
 include/secrets.example.h          Wi-Fi 凭据示例（复制为 secrets.h）
 .github/workflows/build.yml        云端编译 + 发布 Release
