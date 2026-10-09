@@ -31,9 +31,11 @@
 #include "wifi_provision.h"
 
 /* ---------------------------------------------------------------- OLED --- */
-/* 使用软件 I2C（bit-bang），避免 ESP32-C3 新版 I2C 驱动在 begin() 中卡死 */
+/* 使用软件 I2C（bit-bang），避免 ESP32-C3 新版 I2C 驱动在 begin() 中卡死。
+ * 注意：SW-I2C 构造函数参数顺序为 (rotation, clock, data, reset)，
+ *       与 HW-I2C 的 (rotation, reset, clock, data) 不同。 */
 static U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(
-    U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA);
+    U8G2_R0, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA, /* reset=*/ U8X8_PIN_NONE);
 
 /* --------------------------------------------------------------- 状态 ---- */
 static uint8_t  bpcSym[20];          /* 当前帧 20 个四进制符号 */
