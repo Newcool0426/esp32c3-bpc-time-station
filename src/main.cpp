@@ -80,12 +80,48 @@ static void provisionDisplay(const char* l1, const char* l2, const char* l3);
 static void cyclePulseDuty();
 
 /* ---------------------------------------------------------------- LED ---- */
+/* LED 用独立 LEDC 通道驱动（与载波同为 68.5kHz），可做半亮 */
+static void ledPwmInit()
+{
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcAttachChannel(LED_PIN, BPC_FREQ_HZ, 8, LED_LEDC_CHANNEL);
+#else
+    ledcSetup(LED_LEDC_CHANNEL, BPC_FREQ_HZ, 8);
+    ledcAttachPin(LED_PIN, LED_LEDC_CHANNEL);
+#endif
+}
+
+static inline void ledDuty(uint8_t d)
+{
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWriteChannel(LED_LEDC_CHANNEL, d);
+#else
+    ledcWrite(LED_LEDC_CHANNEL, d);
+#endif
+}
+
+/* 全亮 / 全灭（用于未授时的闪烁） */
 static inline void ledWrite(bool on)
 {
 #if LED_ACTIVE_LOW
-    digitalWrite(LED_PIN, on ? LOW : HIGH);
+    ledDuty(on ? 0 : 255);
 #else
-    digitalWrite(LED_PIN, on ? HIGH : LOW);
+    ledDuty(on ? 255 : 0);
+#endif
+}
+
+/* 授时中：跟随载波——满幅时半亮，负脉冲时全灭（同 bpcTransmitterEsp32） */
+static inline void ledMirrorCarrierOn()
+{
+    ledDuty(128);                 /* 50% 占空比 → 半亮 */
+}
+
+static inline void ledMirrorCarrierOff()
+{
+#if LED_ACTIVE_LOW
+    ledDuty(255);                 /* 低电平点亮：255=常高 → 灭 */
+#else
+    ledDuty(0);
 #endif
 }
 
@@ -313,8 +349,8 @@ static void cyclePulseDuty()
 /* =============================================================== setup === */
 void setup()
 {
-    /* LED */
-    pinMode(LED_PIN, OUTPUT);
+    /* LED（独立 LEDC 通道，可半亮） */
+    ledPwmInit();
     ledWrite(false);
 
     /* BOOT 按键 */
@@ -553,9 +589,9 @@ static void signalTick()
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
             pendingTm = t;                  /* 屏幕刷新延后到脉冲结束 */
             pendingRender = true;
-            ledWrite(false);                /* 负脉冲：LED 灭（跟随载波） */
+            ledMirrorCarrierOff();          /* 负脉冲：LED 灭（跟随载波） */
         } else {
-            ledWrite(true);                 /* 满幅载波：LED 亮 */
+            ledMirrorCarrierOn();           /* 满幅载波：LED 半亮 */
             renderClock(&t);                /* 本秒无间隙，直接刷新 */
         }
     }
@@ -563,7 +599,7 @@ static void signalTick()
     if (carrierOff && (int32_t)(nowUs - offUntilUs) >= 0) {
         carrierOn();
         carrierOff = false;
-        ledWrite(true);                     /* 载波恢复：LED 亮 */
+        ledMirrorCarrierOn();               /* 载波恢复：LED 半亮 */
         if (pendingRender) {
             pendingRender = false;
             renderClock(&pendingTm);
