@@ -96,10 +96,8 @@ static inline void ledWrite(bool on)
 static void carrierInit()
 {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcSetClockSource(LEDC_USE_APB_CLK);   /* 80MHz，68.5kHz 最接近 */
     ledcAttachChannel(BPC_PIN, BPC_FREQ_HZ, 8, BPC_LEDC_CHANNEL);
 #else
-    ledcSetClockSource(LEDC_USE_APB_CLK);
     ledcSetup(BPC_LEDC_CHANNEL, BPC_FREQ_HZ, 8);
     ledcAttachPin(BPC_PIN, BPC_LEDC_CHANNEL);
 #endif
