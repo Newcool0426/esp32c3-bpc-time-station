@@ -191,7 +191,7 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
     snprintf(ap, sizeof(ap), "%s-%04X", AP_SSID_PREFIX, (unsigned)(mac & 0xFFFF));
 
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap);
+    bool apOk = WiFi.softAP(ap);
     delay(100);
     IPAddress ip = WiFi.softAPIP();
 
@@ -203,10 +203,14 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
     g_server->onNotFound(handleRoot);       /* 捕获门户探测请求 */
     g_server->begin();
 
-    Serial.printf("Setup AP \"%s\" -> http://%s\n", ap, ip.toString().c_str());
+    Serial.printf("[portal] softAP(\"%s\")=%d ip=%s mac=%s\n",
+                  ap, (int)apOk, ip.toString().c_str(),
+                  WiFi.softAPmacAddress().c_str());
+    Serial.flush();
 
     uint32_t start = millis();
     uint32_t lastDisp = 0;
+    uint32_t lastLog = 0;
     bool ok = false;
 
     for (;;) {
@@ -221,6 +225,11 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
             char ssidLine[44];
             snprintf(ssidLine, sizeof(ssidLine), "AP:%s", ap);
             show("WiFi 设置", ssidLine, ip.toString().c_str());
+        }
+        if (millis() - lastLog > 3000) {
+            lastLog = millis();
+            Serial.printf("[portal] waiting... clients=%d\n", WiFi.softAPgetStationNum());
+            Serial.flush();
         }
         delay(2);
     }

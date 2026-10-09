@@ -121,13 +121,22 @@ Save-ReleaseAsset $fwAsset $target
 $size = [math]::Round((Get-Item $target).Length / 1KB, 1)
 Write-Host "Saved   : $target ($size KB)" -ForegroundColor Green
 
-if ($NoFlash) { Write-Host "-NoFlash set: download only, done."; return }
+if ($NoFlash) { Write-Host "-NoFlash set: download only, done."; exit 0 }
 
 # ---- ensure esptool ---------------------------------------------------------
-python -c "import esptool" 2>$null
+# Native commands that write to stderr (e.g. an ImportError traceback) would
+# otherwise terminate the script while $ErrorActionPreference is "Stop".
+$prevEA = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+
+& python -c "import esptool" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing esptool ..."
-    python -m pip install --upgrade esptool
+    & python -m pip install --upgrade esptool
+    if ($LASTEXITCODE -ne 0) {
+        $ErrorActionPreference = $prevEA
+        throw "Failed to install esptool."
+    }
 }
 
 # ---- auto-detect serial port ------------------------------------------------
@@ -147,9 +156,12 @@ if (-not $Port) {
 }
 
 Write-Host "Flashing $target -> $Port ..." -ForegroundColor Yellow
-python -m esptool --chip esp32c3 --port $Port --baud $Baud `
+& python -m esptool --chip esp32c3 --port $Port --baud $Baud `
     --before default_reset --after hard_reset `
     write_flash -z 0x0 $target
+$flashCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEA
 
-if ($LASTEXITCODE -ne 0) { throw "Flashing failed (esptool exit code $LASTEXITCODE)." }
+if ($flashCode -ne 0) { throw "Flashing failed (esptool exit code $flashCode)." }
 Write-Host "Done. The device reboots and starts broadcasting." -ForegroundColor Green
+exit 0

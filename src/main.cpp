@@ -49,6 +49,7 @@ static uint32_t ledPulseEnd  = 0;
 static uint32_t lastWifiTry  = 0;
 static uint32_t lastNtpMs    = 0;
 static uint32_t lastHouseMs  = 0;
+static uint32_t lastLogMs    = 0;
 static int      lastStatus   = -1;
 
 static bool     btnWasDown   = false;
@@ -177,6 +178,7 @@ void setup()
     delay(100);
     Serial.println();
     Serial.println("=== ESP32-C3 BPC 68.5kHz 授时站 ===");
+    Serial.flush();
 
     /* OLED */
     Wire.begin(OLED_SDA, OLED_SCL);
@@ -187,14 +189,17 @@ void setup()
     u8g2.setFontMode(1);
     u8g2.setFontPosBaseline();
     drawStatusScreen("ESP32-C3", "BPC TX", "68.5 kHz");
+    Serial.printf("[init] OLED ready (SDA=%d SCL=%d addr=0x%02X)\n", OLED_SDA, OLED_SCL, OLED_ADDR);
 
     /* 载波：先静默，等时间有效后再开启 */
     carrierInit();
     carrierSilent();
-    Serial.printf("BPC carrier %d Hz on GPIO%d\n", BPC_FREQ_HZ, BPC_PIN);
+    Serial.printf("[init] BPC carrier %d Hz on GPIO%d\n", BPC_FREQ_HZ, BPC_PIN);
+    Serial.flush();
 
     /* Wi-Fi 配网 */
     wifiProvisionSetDisplay(provisionDisplay);
+    Serial.println("[init] starting Wi-Fi provisioning");
 
     bool haveCreds = wifiProvisionLoad(g_ssid, g_pass);
     if (!haveCreds) {
@@ -202,15 +207,16 @@ void setup()
             g_ssid = WIFI_SSID;
             g_pass = WIFI_PASSWORD;
             haveCreds = true;
-            Serial.println("Using build-time Wi-Fi credentials");
+            Serial.println("[init] using build-time Wi-Fi credentials");
         }
     }
 
     if (haveCreds) {
+        Serial.printf("[init] saved SSID=\"%s\", connecting...\n", g_ssid.c_str());
         wifiProvisionConnect(g_ssid, g_pass, WIFI_CONNECT_TIMEOUT_MS);
         /* 失败则由主循环持续重连；长按 BOOT 3 秒可清除并重新配网 */
     } else {
-        Serial.println("No Wi-Fi credentials -> starting setup AP");
+        Serial.println("[init] no credentials -> starting setup AP");
         for (;;) {
             String s, p;
             if (wifiProvisionRunPortal(PORTAL_TIMEOUT_MS, s, p) &&
@@ -219,7 +225,7 @@ void setup()
                 g_pass = p;
                 break;
             }
-            Serial.println("Setup portal timed out, restarting...");
+            Serial.println("[init] setup portal timed out, restarting...");
             delay(300);
             ESP.restart();
         }
@@ -227,6 +233,8 @@ void setup()
 
     uint32_t now = millis();
     lastWifiTry = lastNtpMs = lastHouseMs = now;
+    Serial.println("[init] setup complete");
+    Serial.flush();
 }
 
 /* ================================================================ loop === */
@@ -242,6 +250,14 @@ void loop()
     }
 
     updateLed(nowMs);
+
+    /* 心跳日志（每 5 秒） */
+    if (nowMs - lastLogMs >= 5000) {
+        lastLogMs = nowMs;
+        Serial.printf("[hb] wifi=%d time=%d ip=%s rssi=%d\n",
+                      (int)wifiUp, (int)timeValid,
+                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+    }
 
     /* 状态页刷新（仅在状态变化时） */
     if (nowMs - lastHouseMs >= 300) {
