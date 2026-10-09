@@ -285,6 +285,29 @@ void setup()
     drawStatusScreen("ESP32-C3", "BPC TX", "68.5 kHz");
     Serial.println("[init] oled: ready");
 
+    /* ===== 临时校准：显示 0..63 行标尺，用于确定实际可见区域 ===== */
+    Serial.println("[cal] calibration ruler for 15s");
+    {
+        uint32_t t0 = millis();
+        while (millis() - t0 < 15000) {
+            u8g2.clearBuffer();
+            u8g2.setFont(u8g2_font_4x6_tr);
+            for (int y = 0; y <= 63; y += 4) {
+                u8g2.drawHLine(OLED_OFF_X, y, OLED_W);   /* 每 4 行一条横线 */
+            }
+            for (int y = 0; y <= 60; y += 8) {
+                char b[4];
+                snprintf(b, sizeof(b), "%d", y);
+                u8g2.setDrawColor(0);
+                u8g2.drawBox(OLED_OFF_X, y, 12, 6);      /* 挖空写行号 */
+                u8g2.setDrawColor(1);
+                u8g2.drawStr(OLED_OFF_X, y + 5, b);
+            }
+            u8g2.sendBuffer();
+            delay(200);
+        }
+    }
+
     /* 载波：先静默，等时间有效后再开启 */
     carrierInit();
     carrierSilent();
