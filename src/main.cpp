@@ -543,7 +543,8 @@ static void signalTick()
             bpc_encode(&t, bpcSym);         /* 每 20 秒重建一帧 */
         }
 
-        int offMs = (bpcSym[fs] == BPC_NO_GAP) ? 0 : (int)bpcSym[fs] * 100;
+        /* 符号 0→100ms, 1→200ms, 2→300ms, 3→400ms；BPC_NO_GAP 表示无间隙 */
+        int offMs = (bpcSym[fs] == BPC_NO_GAP) ? 0 : ((int)bpcSym[fs] + 1) * 100;
 
         if (carrierOff) {                   /* 上一秒的负脉冲收尾 */
             carrierOn();
