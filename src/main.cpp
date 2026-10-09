@@ -150,28 +150,112 @@ static void provisionDisplay(const char* l1, const char* l2, const char* l3)
     drawStatusScreen(l1, l2, l3);
 }
 
-/* 点阵字体，两行显示：第一行 时:分，第二行 秒；尽量占满 72x40 */
+/* ============================================================ 点阵数字 ====
+ * 自己绘制 4x6 点阵数字：每个"点"是 2x2 方块，点与点之间留 1px 间隔，
+ * 呈现真正的点阵(矩阵)外观。两行显示：第一行 时:分，第二行 秒。
+ * ========================================================================= */
+#define DM_DOT    2
+#define DM_GAP    1
+#define DM_ROWS   6
+#define DM_PITCH  (DM_DOT + DM_GAP)                            /* 3 */
+#define DM_LINE_H (DM_ROWS * DM_DOT + (DM_ROWS - 1) * DM_GAP)  /* 17 */
+
+struct DmGlyph { uint8_t w; uint8_t rows[DM_ROWS]; };
+
+static const DmGlyph DM_GLYPH_0 = {4, {0b1111,0b1001,0b1001,0b1001,0b1001,0b1111}};
+static const DmGlyph DM_GLYPH_1 = {4, {0b0100,0b1100,0b0100,0b0100,0b0100,0b1110}};
+static const DmGlyph DM_GLYPH_2 = {4, {0b1111,0b0001,0b0010,0b0100,0b1000,0b1111}};
+static const DmGlyph DM_GLYPH_3 = {4, {0b1111,0b0001,0b0111,0b0001,0b0001,0b1111}};
+static const DmGlyph DM_GLYPH_4 = {4, {0b1001,0b1001,0b1001,0b1111,0b0001,0b0001}};
+static const DmGlyph DM_GLYPH_5 = {4, {0b1111,0b1000,0b1111,0b0001,0b0001,0b1111}};
+static const DmGlyph DM_GLYPH_6 = {4, {0b1111,0b1000,0b1111,0b1001,0b1001,0b1111}};
+static const DmGlyph DM_GLYPH_7 = {4, {0b1111,0b0001,0b0010,0b0100,0b0100,0b0100}};
+static const DmGlyph DM_GLYPH_8 = {4, {0b1111,0b1001,0b1111,0b1001,0b1001,0b1111}};
+static const DmGlyph DM_GLYPH_9 = {4, {0b1111,0b1001,0b1001,0b1111,0b0001,0b1111}};
+static const DmGlyph DM_GLYPH_COLON = {1, {0,1,1,0,1,1}};
+
+static const DmGlyph* dmGlyph(char c)
+{
+    switch (c) {
+        case '0': return &DM_GLYPH_0;
+        case '1': return &DM_GLYPH_1;
+        case '2': return &DM_GLYPH_2;
+        case '3': return &DM_GLYPH_3;
+        case '4': return &DM_GLYPH_4;
+        case '5': return &DM_GLYPH_5;
+        case '6': return &DM_GLYPH_6;
+        case '7': return &DM_GLYPH_7;
+        case '8': return &DM_GLYPH_8;
+        case '9': return &DM_GLYPH_9;
+        case ':': return &DM_GLYPH_COLON;
+    }
+    return nullptr;
+}
+
+static int dmGlyphWidth(const DmGlyph* g)
+{
+    return g->w * DM_DOT + (g->w - 1) * DM_GAP;
+}
+
+static int dmStringWidth(const char* s, int gap)
+{
+    int w = 0;
+    bool first = true;
+    for (; *s; ++s) {
+        const DmGlyph* g = dmGlyph(*s);
+        if (!g) continue;
+        if (!first) w += gap;
+        w += dmGlyphWidth(g);
+        first = false;
+    }
+    return w;
+}
+
+static void dmDrawGlyph(int x, int y, const DmGlyph* g)
+{
+    for (int r = 0; r < DM_ROWS; ++r) {
+        for (int c = 0; c < g->w; ++c) {
+            if (g->rows[r] & (1 << (g->w - 1 - c))) {
+                u8g2.drawBox(x + c * DM_PITCH, y + r * DM_PITCH, DM_DOT, DM_DOT);
+            }
+        }
+    }
+}
+
+static void dmDrawString(int x, int y, const char* s, int gap)
+{
+    bool first = true;
+    for (; *s; ++s) {
+        const DmGlyph* g = dmGlyph(*s);
+        if (!g) continue;
+        if (!first) x += gap;
+        first = false;
+        dmDrawGlyph(x, y, g);
+        x += dmGlyphWidth(g);
+    }
+}
+
+static void dmDrawCentered(int y, const char* s, int gap)
+{
+    int x = OLED_OFF_X + (OLED_W - dmStringWidth(s, gap)) / 2;
+    if (x < OLED_OFF_X) x = OLED_OFF_X;
+    dmDrawString(x, y, s, gap);
+}
+
+/* 两行点阵时间：第一行 时:分，第二行 秒 */
 static void renderClock(const struct tm* t)
 {
     char hm[8];
-    char ss[4];
+    char ss[3];
     snprintf(hm, sizeof(hm), "%02d:%02d", t->tm_hour, t->tm_min);
     snprintf(ss, sizeof(ss), "%02d", t->tm_sec);
 
+    const int gap     = 4;   /* 字符间距 */
+    const int lineGap = 6;   /* 两行之间的间距，避免重叠 */
+
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_10x20_tr);   /* 内置最大号点阵位图字体 10x20 */
-
-    /* 用字体度量把两行垂直居中，占满可见高度 */
-    int a  = (int)u8g2.getAscent();
-    int d  = (int)u8g2.getDescent();
-    int lh = a + d;                      /* 行高 */
-    int top = OLED_OFF_Y + (OLED_H - 2 * lh) / 2;
-    if (top < OLED_OFF_Y) top = OLED_OFF_Y;
-    int y1 = top + a;                    /* 第一行基线：时:分 */
-    int y2 = y1 + lh;                    /* 第二行基线：秒 */
-
-    centerStr(y1, hm);
-    centerStr(y2, ss);
+    dmDrawCentered(OLED_OFF_Y, hm, gap);
+    dmDrawCentered(OLED_OFF_Y + DM_LINE_H + lineGap, ss, gap);
     u8g2.sendBuffer();
 }
 
