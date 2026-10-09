@@ -173,7 +173,7 @@ $ErrorActionPreference = "Continue"
 & python -c "import esptool" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing esptool ..."
-    & python -m pip install --upgrade esptool
+    & python -m pip install --upgrade esptool 2>&1
     if ($LASTEXITCODE -ne 0) {
         $ErrorActionPreference = $prevEA
         throw "Failed to install esptool."
@@ -204,12 +204,12 @@ if ($incremental) {
         0x0     $bootPath `
         0x8000  $partsPath `
         0xe000  $otaPath `
-        0x10000 $appPath
+        0x10000 $appPath 2>&1
 } else {
     Write-Host "Flashing FULL merged image (ERASES NVS/Wi-Fi config) -> $Port ..." -ForegroundColor Yellow
     & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
         --before default_reset --after hard_reset `
-        write_flash -z 0x0 $fullPath
+        write_flash -z 0x0 $fullPath 2>&1
 }
 $flashCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEA
