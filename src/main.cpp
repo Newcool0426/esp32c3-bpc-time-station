@@ -47,9 +47,6 @@ static time_t   lastSec      = 0;
 static bool     carrierOff   = false; /* 当前是否处于负脉冲(关断)期 */
 static uint32_t offUntilUs   = 0;
 
-static bool     ledPulseOn   = false; /* 每秒脉冲指示 */
-static uint32_t ledPulseEnd  = 0;
-
 static uint32_t lastWifiTry  = 0;
 static uint32_t lastNtpPollMs  = 0;
 static uint32_t lastNtpForceMs = 0;
@@ -554,21 +551,19 @@ static void signalTick()
             carrierPulse();                 /* 整秒开始处的负脉冲（降幅） */
             carrierOff = true;
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
-            pendingTm = t;                  /* 屏幕刷新延后到脉冲结束，避免影响脉冲宽度 */
+            pendingTm = t;                  /* 屏幕刷新延后到脉冲结束 */
             pendingRender = true;
+            ledWrite(false);                /* 负脉冲：LED 灭（跟随载波） */
         } else {
+            ledWrite(true);                 /* 满幅载波：LED 亮 */
             renderClock(&t);                /* 本秒无间隙，直接刷新 */
         }
-
-        /* 每秒一个 LED 脉冲，指示"正在授时" */
-        ledPulseOn = true;
-        ledPulseEnd = millis() + 40;
-        ledWrite(true);
     }
 
     if (carrierOff && (int32_t)(nowUs - offUntilUs) >= 0) {
         carrierOn();
         carrierOff = false;
+        ledWrite(true);                     /* 载波恢复：LED 亮 */
         if (pendingRender) {
             pendingRender = false;
             renderClock(&pendingTm);
@@ -580,17 +575,13 @@ static void signalTick()
 static void updateLed(uint32_t nowMs)
 {
     if (timeValid) {
-        if (ledPulseOn && (int32_t)(nowMs - ledPulseEnd) >= 0) {
-            ledPulseOn = false;
-            ledWrite(false);
-        }
-        return;
+        return;                 /* 授时中：LED 由 signalTick 跟随载波状态控制 */
     }
 
-    /* 尚未授时：闪灯提示 */
+    /* 尚未授时：有网无时间=快闪(对时中)，无网=慢闪 */
     static uint32_t nextToggle = 0;
     static bool     state      = false;
-    uint32_t period = wifiUp ? 120 : 350;   /* 有网无时间(对时中)更快 */
+    uint32_t period = wifiUp ? 120 : 350;
     if ((int32_t)(nowMs - nextToggle) >= 0) {
         state = !state;
         ledWrite(state);
