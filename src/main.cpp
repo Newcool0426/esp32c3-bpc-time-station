@@ -251,7 +251,7 @@ static void renderClock(const struct tm* t)
     snprintf(ss, sizeof(ss), "%02d", t->tm_sec);
 
     const int gap     = 4;   /* 字符间距 */
-    const int lineGap = 6;   /* 两行之间的间距，避免重叠 */
+    const int lineGap = 4;   /* 两行之间的间距，避免重叠 */
 
     u8g2.clearBuffer();
     dmDrawCentered(OLED_OFF_Y, hm, gap);

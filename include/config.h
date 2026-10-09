@@ -42,7 +42,7 @@
 #define OLED_SCL            6
 #define OLED_ADDR           0x3C
 #define OLED_OFF_X          30
-#define OLED_OFF_Y          22
+#define OLED_OFF_Y          24
 #define OLED_W              72
 #define OLED_H              40
 
