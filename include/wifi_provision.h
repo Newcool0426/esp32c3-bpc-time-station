@@ -1,8 +1,8 @@
 /*
- * wifi_provision.h - Wi-Fi 配网（热点 + 网页配置）
+ * wifi_provision.h - Wi-Fi 配网（热点 + 网页配置，支持保存多组网络）
  *
- * 无已保存凭据时开启开放热点，用户用手机/电脑连接后在网页里
- * 填写 SSID/密码，凭据保存到 NVS，设备随后自动连接。
+ * 可保存多组 Wi-Fi 凭据到 NVS；开机/断线时扫描周围网络，
+ * 自动连接其中信号最好的一组已知网络。
  */
 #pragma once
 #include <Arduino.h>
@@ -12,13 +12,19 @@ typedef void (*ProvisionDisplayFn)(const char* line1, const char* line2, const c
 
 void wifiProvisionSetDisplay(ProvisionDisplayFn fn);
 
-/* NVS 中的 Wi-Fi 凭据 */
-bool wifiProvisionLoad(String& ssid, String& pass);
-void wifiProvisionSave(const String& ssid, const String& pass);
-void wifiProvisionClear();
+#define WIFI_MAX_NETS 8                  /* 最多保存的网络组数 */
 
-/* 阻塞式连接，返回是否成功 */
+/* NVS 中的多组 Wi-Fi 凭据 */
+int  wifiProvisionCount();
+int  wifiProvisionLoadList(String ssids[], String passes[], int maxN);
+bool wifiProvisionAdd(const String& ssid, const String& pass);   /* 添加/更新一组 */
+void wifiProvisionClear();                                       /* 清除全部 */
+
+/* 阻塞式连接指定网络，返回是否成功 */
 bool wifiProvisionConnect(const String& ssid, const String& pass, uint32_t timeoutMs);
 
-/* 开启配置热点并等待用户提交，成功则通过 outSsid/outPass 返回 */
+/* 扫描周围网络，自动连接已知网络中信号最好的一组 */
+bool wifiProvisionConnectAny(uint32_t perNetTimeoutMs, String& outSsid, String& outPass);
+
+/* 开启配置热点并等待用户提交，成功则通过 outSsid/outPass 返回刚保存的网络 */
 bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass);

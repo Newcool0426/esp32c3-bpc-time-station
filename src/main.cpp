@@ -394,20 +394,22 @@ void setup()
     wifiProvisionSetDisplay(provisionDisplay);
     Serial.println("[init] starting Wi-Fi provisioning");
 
-    bool haveCreds = wifiProvisionLoad(g_ssid, g_pass);
-    if (!haveCreds) {
-        if (WIFI_SSID[0] && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
-            g_ssid = WIFI_SSID;
-            g_pass = WIFI_PASSWORD;
-            haveCreds = true;
-            Serial.println("[init] using build-time Wi-Fi credentials");
-        }
+    /* 把编译时内置凭据并入列表（若提供且非占位符） */
+    if (WIFI_SSID[0] && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
+        wifiProvisionAdd(WIFI_SSID, WIFI_PASSWORD);
     }
 
-    if (haveCreds) {
-        Serial.printf("[init] saved SSID=\"%s\", connecting...\n", g_ssid.c_str());
-        wifiProvisionConnect(g_ssid, g_pass, WIFI_CONNECT_TIMEOUT_MS);
-        /* 失败则由主循环持续重连；长按 BOOT 3 秒可清除并重新配网 */
+    int wifiCount = wifiProvisionCount();
+    Serial.printf("[init] %d saved Wi-Fi network(s)\n", wifiCount);
+
+    if (wifiCount > 0) {
+        Serial.println("[init] scanning & connecting to a known network...");
+        if (wifiProvisionConnectAny(10000, g_ssid, g_pass)) {
+            Serial.printf("[init] connected to \"%s\"\n", g_ssid.c_str());
+        } else {
+            Serial.println("[init] no known Wi-Fi in range; will keep retrying in loop");
+        }
+        /* 失败由主循环持续重扫重连；长按 BOOT 3 秒可清除并重新配网 */
     } else {
         Serial.println("[init] no credentials -> starting setup AP");
         for (;;) {
@@ -509,13 +511,14 @@ static void maintainNet(uint32_t nowMs)
         }
     } else {
         wifiUp = false;
-        /* 断线重连（避免过于频繁地打断正在进行的连接） */
+        /* 断线：每隔一段时间扫描并连接已知网络中信号最好的一组 */
         if ((st == WL_DISCONNECTED || st == WL_CONNECT_FAILED ||
              st == WL_NO_SSID_AVAIL) &&
-            (uint32_t)(nowMs - lastWifiTry) > 10000) {
+            (uint32_t)(nowMs - lastWifiTry) > 30000) {
             lastWifiTry = nowMs;
-            Serial.println("WiFi reconnect...");
-            WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+            Serial.println("WiFi reconnect: scanning known networks...");
+            String s, p;
+            wifiProvisionConnectAny(8000, s, p);
         }
     }
 }

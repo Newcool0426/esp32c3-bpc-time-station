@@ -1,8 +1,9 @@
 /*
- * wifi_provision.cpp - 热点 + 网页配网实现
+ * wifi_provision.cpp - 热点 + 网页配网实现（多组 Wi-Fi）
  *
- * 流程：扫描周围 Wi-Fi -> 开启开放热点 -> 内建 DNS 劫持 + HTTP 服务
- *       -> 用户提交 SSID/密码 -> 保存到 NVS -> 退出热点。
+ * NVS(namespace "bpcwifi", key "list") 中保存多组凭据：
+ *   每组一行 "ssid\tpass"，组间用 '\n' 分隔。
+ * 开机/断线时扫描周围网络，按信号强度自动连接已知网络。
  */
 #include "wifi_provision.h"
 #include "config.h"
@@ -44,30 +45,98 @@ static String htmlEscape(const String& in)
     return o;
 }
 
-/* --------------------------------------------------------------- NVS ----- */
-bool wifiProvisionLoad(String& ssid, String& pass)
+/* --------------------------------------------------------------- 存储 ---- */
+static const char* NVS_NS  = "bpcwifi";
+static const char* NVS_KEY = "list";
+
+static String loadRaw()
 {
     Preferences p;
-    p.begin("bpcwifi", true);
-    ssid = p.getString("ssid", "");
-    pass = p.getString("pass", "");
+    p.begin(NVS_NS, true);
+    String s = p.getString(NVS_KEY, "");
+    if (s.isEmpty()) {
+        /* 兼容旧的单组存储 */
+        String o = p.getString("ssid", "");
+        if (!o.isEmpty()) s = o + "\t" + p.getString("pass", "");
+    }
     p.end();
-    return ssid.length() > 0;
+    return s;
 }
 
-void wifiProvisionSave(const String& ssid, const String& pass)
+static void saveRaw(const String& s)
 {
     Preferences p;
-    p.begin("bpcwifi", false);
-    p.putString("ssid", ssid);
-    p.putString("pass", pass);
+    p.begin(NVS_NS, false);
+    p.putString(NVS_KEY, s);
+    p.remove("ssid");
+    p.remove("pass");
     p.end();
+}
+
+int wifiProvisionLoadList(String ssids[], String passes[], int maxN)
+{
+    String raw = loadRaw();
+    int n = 0, pos = 0;
+    while (pos < (int)raw.length() && n < maxN) {
+        int nl = raw.indexOf('\n', pos);
+        String line = (nl < 0) ? raw.substring(pos) : raw.substring(pos, nl);
+        pos = (nl < 0) ? raw.length() : nl + 1;
+        line.trim();
+        if (line.isEmpty()) continue;
+        int tab = line.indexOf('\t');
+        String s = (tab < 0) ? line : line.substring(0, tab);
+        String p = (tab < 0) ? String("") : line.substring(tab + 1);
+        s.trim();
+        if (s.isEmpty()) continue;
+        ssids[n] = s;
+        passes[n] = p;
+        ++n;
+    }
+    return n;
+}
+
+int wifiProvisionCount()
+{
+    String ss[WIFI_MAX_NETS], pp[WIFI_MAX_NETS];
+    return wifiProvisionLoadList(ss, pp, WIFI_MAX_NETS);
+}
+
+bool wifiProvisionAdd(const String& ssid, const String& pass)
+{
+    if (ssid.isEmpty()) return false;
+
+    String ss[WIFI_MAX_NETS], pp[WIFI_MAX_NETS];
+    int n = wifiProvisionLoadList(ss, pp, WIFI_MAX_NETS);
+
+    int idx = -1;
+    for (int i = 0; i < n; ++i) if (ss[i] == ssid) { idx = i; break; }
+
+    if (idx < 0) {
+        if (n >= WIFI_MAX_NETS) {           /* 满了：丢弃最旧的一组 */
+            for (int i = 1; i < n; ++i) { ss[i - 1] = ss[i]; pp[i - 1] = pp[i]; }
+            --n;
+        }
+        idx = n++;
+    }
+    ss[idx] = ssid;
+    pp[idx] = pass;
+
+    String raw;
+    for (int i = 0; i < n; ++i) {
+        if (i) raw += '\n';
+        raw += ss[i];
+        raw += '\t';
+        raw += pp[i];
+    }
+    saveRaw(raw);
+    Serial.printf("WiFi saved (%d): %s\n", n, ssid.c_str());
+    return true;
 }
 
 void wifiProvisionClear()
 {
     Preferences p;
-    p.begin("bpcwifi", false);
+    p.begin(NVS_NS, false);
     p.clear();
     p.end();
 }
@@ -103,27 +172,80 @@ bool wifiProvisionConnect(const String& ssid, const String& pass, uint32_t timeo
         delay(50);
     }
 
-    show("WiFi", "failed", "hold BOOT");
-    Serial.println("WiFi connect failed");
+    show("WiFi", "failed", shortSsid);
+    Serial.printf("WiFi connect to \"%s\" failed\n", ssid.c_str());
+    return false;
+}
+
+/* 扫描周围网络，自动连接已知网络中信号最好的一组 */
+bool wifiProvisionConnectAny(uint32_t perNetTimeoutMs, String& outSsid, String& outPass)
+{
+    String ss[WIFI_MAX_NETS], pp[WIFI_MAX_NETS];
+    int n = wifiProvisionLoadList(ss, pp, WIFI_MAX_NETS);
+    if (n <= 0) return false;
+
+    WiFi.mode(WIFI_STA);
+    delay(50);
+    int found = WiFi.scanNetworks();
+
+    int rssi[WIFI_MAX_NETS];
+    for (int i = 0; i < n; ++i) rssi[i] = -1000;
+    for (int j = 0; j < found; ++j) {
+        String s = WiFi.SSID(j);
+        int r = WiFi.RSSI(j);
+        for (int i = 0; i < n; ++i) if (ss[i] == s && r > rssi[i]) rssi[i] = r;
+    }
+    WiFi.scanDelete();
+
+    /* 已知网络中：范围内按信号从强到弱，范围外的排后面（可能是隐藏 SSID） */
+    int order[WIFI_MAX_NETS];
+    for (int i = 0; i < n; ++i) order[i] = i;
+    for (int a = 0; a < n; ++a)
+        for (int b = a + 1; b < n; ++b)
+            if (rssi[order[b]] > rssi[order[a]]) { int t = order[a]; order[a] = order[b]; order[b] = t; }
+
+    for (int k = 0; k < n; ++k) {
+        int i = order[k];
+        Serial.printf("try WiFi \"%s\" (rssi=%d)\n", ss[i].c_str(), rssi[i]);
+        if (wifiProvisionConnect(ss[i], pp[i], perNetTimeoutMs)) {
+            outSsid = ss[i];
+            outPass = pp[i];
+            return true;
+        }
+    }
     return false;
 }
 
 /* ------------------------------------------------------------- 网页 ------ */
 static String configPage()
 {
+    String saved;
+    {
+        String ss[WIFI_MAX_NETS], pp[WIFI_MAX_NETS];
+        int n = wifiProvisionLoadList(ss, pp, WIFI_MAX_NETS);
+        if (n == 0) saved = F("<li><small>（暂无）</small></li>");
+        for (int i = 0; i < n; ++i) saved += "<li>" + htmlEscape(ss[i]) + "</li>";
+    }
+
     String h;
-    h.reserve(1800);
+    h.reserve(2000);
     h += F("<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">");
     h += F("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
     h += F("<title>BPC 授时站 Wi-Fi 设置</title><style>");
     h += F("body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;margin:24px;max-width:420px;color:#222}");
-    h += F("h2{font-size:20px;margin:0 0 6px}");
+    h += F("h2{font-size:20px;margin:0 0 6px}h3{font-size:15px;margin:22px 0 6px;color:#444}");
     h += F("label{display:block;margin:14px 0 4px;font-size:14px;color:#444}");
     h += F("input{width:100%;padding:10px;font-size:16px;box-sizing:border-box;border:1px solid #ccc;border-radius:6px}");
-    h += F("button{margin-top:20px;width:100%;padding:12px;font-size:16px;background:#0a8f6a;color:#fff;border:0;border-radius:6px}");
+    h += F("button{margin-top:14px;width:100%;padding:12px;font-size:16px;background:#0a8f6a;color:#fff;border:0;border-radius:6px}");
+    h += F("button.grey{background:#888}ul{padding-left:20px;color:#333}");
     h += F("small{color:#666}</style></head><body>");
     h += F("<h2>BPC 授时站 · Wi-Fi 设置</h2>");
-    h += F("<p><small>选择或输入要连接的 2.4GHz Wi-Fi 名称与密码，保存后设备将自动连接。</small></p>");
+    h += F("<p><small>可保存多组 Wi-Fi；开机/断线时自动连接范围内信号最好的一组。</small></p>");
+    h += F("<h3>已保存的网络</h3><ul>");
+    h += saved;
+    h += F("</ul>");
+    h += F("<form action=\"/clear\" method=\"POST\"><button class=\"grey\" type=\"submit\">清除全部</button></form>");
+    h += F("<h3>添加 / 更新网络</h3>");
     h += F("<form action=\"/save\" method=\"POST\">");
     h += F("<label>Wi-Fi 名称 (SSID)</label>");
     h += F("<input name=\"ssid\" list=\"nets\" required autocomplete=\"off\" placeholder=\"SSID\">");
@@ -137,10 +259,7 @@ static String configPage()
     return h;
 }
 
-static void handleRoot()
-{
-    g_server->send(200, "text/html", configPage());
-}
+static void handleRoot()  { g_server->send(200, "text/html", configPage()); }
 
 static void handleSave()
 {
@@ -153,12 +272,20 @@ static void handleSave()
         return;
     }
 
-    wifiProvisionSave(g_newSsid, g_newPass);
+    wifiProvisionAdd(g_newSsid, g_newPass);
     g_configured = true;
 
     g_server->send(200, "text/html", F("<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
                                        "<h3>已保存</h3><p>设备正在连接 Wi-Fi，请稍候…</p>"));
     Serial.printf("Provisioned: SSID=\"%s\"\n", g_newSsid.c_str());
+}
+
+static void handleClear()
+{
+    wifiProvisionClear();
+    g_server->send(200, "text/html", F("<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                                       "<h3>已清除全部 Wi-Fi</h3><a href=\"/\">返回</a>"));
+    Serial.println("Provisioned: cleared all WiFi");
 }
 
 /* ------------------------------------------------------------- 配网热点 -- */
@@ -200,6 +327,7 @@ bool wifiProvisionRunPortal(uint32_t timeoutMs, String& outSsid, String& outPass
     g_dns->start(53, "*", ip);
     g_server->on("/", HTTP_GET, handleRoot);
     g_server->on("/save", HTTP_POST, handleSave);
+    g_server->on("/clear", HTTP_POST, handleClear);
     g_server->onNotFound(handleRoot);       /* 捕获门户探测请求 */
     g_server->begin();
 
