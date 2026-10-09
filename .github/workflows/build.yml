@@ -103,11 +103,23 @@ jobs:
           mkdir -p dist
           cp .pio/build/esp32-c3/merged.bin "dist/bpc-time-station-${VERSION}.bin"
           cp .pio/build/esp32-c3/merged.bin "dist/bpc-time-station.bin"
+          # 分区块镜像：刷写时不覆盖 NVS(0x9000)，可保留已保存的 Wi-Fi 配网信息
+          cp .pio/build/esp32-c3/bootloader.bin "dist/bpc-bootloader.bin"
+          cp .pio/build/esp32-c3/partitions.bin "dist/bpc-partitions.bin"
+          cp .pio/build/esp32-c3/boot_app0.bin   "dist/bpc-boot_app0.bin"
+          cp .pio/build/esp32-c3/firmware.bin    "dist/bpc-app.bin"
           {
             echo "version=${VERSION}"
             echo "commit=${GITHUB_SHA}"
             echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > dist/version.txt
+          {
+            echo "0x0     bpc-bootloader.bin"
+            echo "0x8000  bpc-partitions.bin"
+            echo "0xe000  bpc-boot_app0.bin"
+            echo "0x10000 bpc-app.bin"
+            echo "full:   0x0 bpc-time-station.bin   (single image; erases NVS)"
+          } > dist/flash-layout.txt
           ls -l dist
 
       - name: Upload workflow artifact
@@ -128,10 +140,18 @@ jobs:
 
             - version: `${{ steps.prep.outputs.VERSION }}`
             - commit: `${{ github.sha }}`
+
+            Flashing (preserves saved Wi-Fi config):
+            `write_flash -z 0x0 bpc-bootloader.bin 0x8000 bpc-partitions.bin 0xe000 bpc-boot_app0.bin 0x10000 bpc-app.bin`
           files: |
             dist/bpc-time-station.bin
             dist/bpc-time-station-${{ steps.prep.outputs.VERSION }}.bin
+            dist/bpc-bootloader.bin
+            dist/bpc-partitions.bin
+            dist/bpc-boot_app0.bin
+            dist/bpc-app.bin
             dist/version.txt
+            dist/flash-layout.txt
           prerelease: false
           make_latest: true
           overwrite_files: true

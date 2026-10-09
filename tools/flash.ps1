@@ -3,16 +3,27 @@
     One-click download + rename + flash of the ESP32-C3 BPC time-station firmware.
 
 .DESCRIPTION
-    Downloads the newest firmware from the GitHub "latest" release, renames it
-    with its version, then flashes it with esptool. The serial port is
-    auto-detected.
+    Downloads the newest firmware from the GitHub "latest" release, then flashes
+    it with esptool. The serial port is auto-detected.
+
+    By default it flashes the individual regions:
+        0x0     bpc-bootloader.bin
+        0x8000  bpc-partitions.bin
+        0xe000  bpc-boot_app0.bin
+        0x10000 bpc-app.bin
+    This leaves the NVS partition (0x9000) untouched, so the saved Wi-Fi
+    provisioning is preserved across firmware updates.
+
+    With -Full it writes the single merged image at 0x0 instead. That is handy
+    for a first flash or recovery, but it ERASES the NVS partition and therefore
+    wipes the saved Wi-Fi credentials.
 
     Release assets are fetched through the GitHub REST API (api.github.com)
-    instead of github.com/releases/download, so it also works on networks
-    where the github.com host is slow or blocked.
+    instead of github.com/releases/download, so it also works where the
+    github.com host is slow or blocked.
 
-    This script is intentionally ASCII-only so it parses correctly under
-    Windows PowerShell 5.1 regardless of the system codepage.
+    This script is ASCII-only and runs on both Windows PowerShell 5.1 and
+    PowerShell 7 (pwsh).
 
 .PARAMETER Repo
     GitHub repository as owner/name. Defaults to the "origin" git remote.
@@ -30,13 +41,18 @@
 .PARAMETER Baud
     Download baud rate. Default: 921600
 
+.PARAMETER Full
+    Flash the single merged image at 0x0 (erases NVS / Wi-Fi config).
+
 .PARAMETER NoFlash
     Download only, do not flash.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File tools\flash.ps1
+    pwsh -File tools\flash.ps1
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File tools\flash.ps1 -Port COM5
+    pwsh -File tools\flash.ps1 -Port COM5
+.EXAMPLE
+    pwsh -File tools\flash.ps1 -Full
 #>
 [CmdletBinding()]
 param(
@@ -45,6 +61,7 @@ param(
     [string]$Token = $env:GITHUB_TOKEN,
     [string]$OutDir = "firmware",
     [int]$Baud = 921600,
+    [switch]$Full,
     [switch]$NoFlash
 )
 
@@ -99,12 +116,12 @@ function Get-ReleaseAssetString([object]$asset) {
 }
 
 Write-Host "Querying latest release ..."
-$release  = Invoke-RestMethod -Headers $jsonHeaders -Uri "$apiBase/releases/latest"
-$fwAsset  = $release.assets | Where-Object { $_.name -eq "bpc-time-station.bin" }
-if (-not $fwAsset) { throw "bpc-time-station.bin not found in latest release ($($release.tag_name))." }
+$release = Invoke-RestMethod -Headers $jsonHeaders -Uri "$apiBase/releases/latest"
+$assets  = $release.assets
+function Find-Asset([string]$name) { $assets | Where-Object { $_.name -eq $name } }
 
-$version  = $release.tag_name
-$verAsset = $release.assets | Where-Object { $_.name -eq "version.txt" }
+$version = $release.tag_name
+$verAsset = Find-Asset "version.txt"
 if ($verAsset) {
     try {
         $txt = Get-ReleaseAssetString $verAsset
@@ -113,19 +130,43 @@ if ($verAsset) {
 }
 Write-Host "Version : $version" -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$target = Join-Path $OutDir "bpc-time-station-$version.bin"
+$boot   = Find-Asset "bpc-bootloader.bin"
+$parts  = Find-Asset "bpc-partitions.bin"
+$ota    = Find-Asset "bpc-boot_app0.bin"
+$app    = Find-Asset "bpc-app.bin"
+$merged = Find-Asset "bpc-time-station.bin"
 
-Write-Host "Downloading asset id $($fwAsset.id) ..."
-Save-ReleaseAsset $fwAsset $target
-$size = [math]::Round((Get-Item $target).Length / 1KB, 1)
-Write-Host "Saved   : $target ($size KB)" -ForegroundColor Green
+$incremental = ($boot -and $parts -and $ota -and $app -and -not $Full)
+if (-not $incremental -and -not $merged) {
+    throw "No firmware assets found in the latest release ($version)."
+}
+
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+$bootPath  = Join-Path $OutDir "bpc-bootloader.bin"
+$partsPath = Join-Path $OutDir "bpc-partitions.bin"
+$otaPath   = Join-Path $OutDir "bpc-boot_app0.bin"
+$appPath   = Join-Path $OutDir "bpc-app-$version.bin"
+$fullPath  = Join-Path $OutDir "bpc-time-station-$version.bin"
+
+if ($incremental) {
+    Write-Host "Downloading app image (v$version) ..."
+    Save-ReleaseAsset $boot  $bootPath
+    Save-ReleaseAsset $parts $partsPath
+    Save-ReleaseAsset $ota   $otaPath
+    Save-ReleaseAsset $app   $appPath
+    Write-Host "Saved   : $appPath ($([math]::Round((Get-Item $appPath).Length/1KB,1)) KB)" -ForegroundColor Green
+} else {
+    Write-Host "Downloading full merged image (v$version) ..."
+    Save-ReleaseAsset $merged $fullPath
+    Write-Host "Saved   : $fullPath ($([math]::Round((Get-Item $fullPath).Length/1KB,1)) KB)" -ForegroundColor Green
+}
 
 if ($NoFlash) { Write-Host "-NoFlash set: download only, done."; exit 0 }
 
 # ---- ensure esptool ---------------------------------------------------------
-# Native commands that write to stderr (e.g. an ImportError traceback) would
-# otherwise terminate the script while $ErrorActionPreference is "Stop".
+# Native commands that write to stderr would otherwise terminate the script
+# while $ErrorActionPreference is "Stop".
 $prevEA = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 
@@ -155,10 +196,21 @@ if (-not $Port) {
     Write-Host "Port    : $Port ($($pick.Name))" -ForegroundColor Cyan
 }
 
-Write-Host "Flashing $target -> $Port ..." -ForegroundColor Yellow
-& python -m esptool --chip esp32c3 --port $Port --baud $Baud `
-    --before default_reset --after hard_reset `
-    write_flash -z 0x0 $target
+if ($incremental) {
+    Write-Host "Flashing (incremental, keeps NVS/Wi-Fi config) -> $Port ..." -ForegroundColor Yellow
+    & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
+        --before default_reset --after hard_reset `
+        write_flash -z `
+        0x0     $bootPath `
+        0x8000  $partsPath `
+        0xe000  $otaPath `
+        0x10000 $appPath
+} else {
+    Write-Host "Flashing FULL merged image (ERASES NVS/Wi-Fi config) -> $Port ..." -ForegroundColor Yellow
+    & python -m esptool --chip esp32c3 --port $Port --baud $Baud `
+        --before default_reset --after hard_reset `
+        write_flash -z 0x0 $fullPath
+}
 $flashCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEA
 

@@ -63,7 +63,7 @@ GPIO0 ──[ 330 Ω ]──( 线圈 ~20 圈 )── GND
 2. 浏览器打开 `http://192.168.4.1`（多数手机会自动弹出配置页）；
 3. 选择 / 输入 2.4GHz Wi-Fi 名称与密码，点击“保存并连接”。
 
-凭据保存在设备 NVS 中，之后每次上电自动连接。运行中如需更换网络，长按 BOOT 键 3 秒，设备会清除凭据并重启进入配网热点。
+凭据保存在设备 NVS（`bpcwifi` 命名空间）中，**断电、重启、以及默认的增量刷写都不会丢失**，之后每次上电自动连接。运行中如需更换网络，长按 BOOT 键 3 秒，设备会清除凭据并重启进入配网热点（仅 `-Full` 整片刷写或 `erase_flash` 会清空）。
 
 **方式二：编译时内置凭据（可选）**
 
@@ -82,34 +82,56 @@ GPIO0 ──[ 330 Ω ]──( 线圈 ~20 圈 )── GND
 
 先在 GitHub 上把仓库变成"有 `latest` Release"（推一次代码即可）。
 
-Windows PowerShell：
+Windows PowerShell **5.1 或 7 均可**（脚本为纯 ASCII，兼容两种版本）：
 
 ```powershell
-# 自动探测串口，下载最新固件并刷写
+# PowerShell 7
+pwsh -File tools\flash.ps1
+# 或 Windows PowerShell 5.1
 powershell -ExecutionPolicy Bypass -File tools\flash.ps1
 ```
 
 脚本会自动：
 
-1. 从 `latest` Release 下载 `bpc-time-station.bin`（走 `api.github.com`，即使 `github.com` 直连受限也可用）；
-2. 读取 `version.txt`，把固件**重命名**为 `firmware/bpc-time-station-<版本>.bin`；
+1. 从 `latest` Release 下载分区块固件（走 `api.github.com`，即使 `github.com` 直连受限也可用）；
+2. 按版本号保存到 `firmware/`；
 3. 自动安装 esptool（如缺失）；
-4. 自动探测串口，刷写到 `0x0` 并复位设备。
+4. 自动探测串口，按分区刷写并复位。
 
-> 本地只需 Python + esptool 用于**刷写**，不需要任何编译工具链。
+### 默认：增量刷写，保留配网信息
+
+默认写入 4 个分区：
+
+```
+0x0     bpc-bootloader.bin
+0x8000  bpc-partitions.bin
+0xe000  bpc-boot_app0.bin
+0x10000 bpc-app.bin
+```
+
+NVS 分区在 `0x9000`，**不在这四个区间内**，所以**升级固件不会丢失已保存的 Wi-Fi 配网信息**。
+
+### 可选：整片刷写（首次 / 救砖）
+
+用单个合并镜像整片写入 `0x0`，方便但会**清空 NVS（配网信息丢失）**：
+
+```powershell
+pwsh -File tools\flash.ps1 -Full
+```
+
+若刷写时找不到设备，请按住 **BOOT** 键再插 USB 进入下载模式，然后指定 `-Port` 重试。
 
 常用参数：
 
 ```powershell
-# 指定串口
-... -File tools\flash.ps1 -Port COM5
-# 私有仓库需要 Token
-... -File tools\flash.ps1 -Token ghp_xxx
-# 只下载不刷写
-... -File tools\flash.ps1 -NoFlash
+-Repo owner/name   # 覆盖自动识别的仓库
+-Port COM5         # 指定串口
+-Token ghp_xxx     # 私有仓库需要 Token
+-NoFlash           # 只下载不刷写
+-Full              # 合并镜像整片刷写（清空配网）
 ```
 
-若刷写时找不到设备，请按住 **BOOT** 键再插 USB 进入下载模式，然后指定 `-Port` 重试。
+> 本地只需 Python + esptool 用于**刷写**，不需要任何编译工具链。
 
 ---
 
