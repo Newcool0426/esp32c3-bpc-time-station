@@ -31,8 +31,9 @@
 #include "wifi_provision.h"
 
 /* ---------------------------------------------------------------- OLED --- */
-static U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(
-    U8G2_R0, U8X8_PIN_NONE, OLED_SCL, OLED_SDA);
+/* 使用软件 I2C（bit-bang），避免 ESP32-C3 新版 I2C 驱动在 begin() 中卡死 */
+static U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(
+    U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA);
 
 /* --------------------------------------------------------------- 状态 ---- */
 static uint8_t  bpcSym[20];          /* 当前帧 20 个四进制符号 */
@@ -179,15 +180,11 @@ void setup()
     Serial.println();
     Serial.println("=== ESP32-C3 BPC 68.5kHz 授时站 ===");
 
-    /* OLED */
-    Serial.printf("[init] oled: Wire.begin(SDA=%d,SCL=%d)...\n", OLED_SDA, OLED_SCL);
-    Wire.begin(OLED_SDA, OLED_SCL);
-    Wire.setTimeOut(50);
-    Wire.setClock(100000);
-    Serial.println("[init] oled: u8g2.begin...");
+    /* OLED（软件 I2C，不依赖 Wire 外设） */
+    Serial.printf("[init] oled: SW-I2C begin (SDA=%d,SCL=%d)...\n", OLED_SDA, OLED_SCL);
     u8g2.setI2CAddress(OLED_ADDR << 1);
     u8g2.begin();
-    u8g2.setBusClock(100000);
+    u8g2.setBusClock(400000);
     u8g2.setFontMode(1);
     u8g2.setFontPosBaseline();
     Serial.println("[init] oled: first draw...");
