@@ -27,6 +27,12 @@
 #define BPC_FREQ_HZ         68500        /* BPC 载波频率 68.5 kHz */
 #define BPC_LEDC_CHANNEL    0
 
+/* 负脉冲期间的载波占空比(0-255)：
+ *   0  = 完全关断 (100% 调幅，接收端 AGC 易失压)
+ *   20 ≈ 8% 占空比，基波幅度约 25%，接近 BPC 规范的 10~30% 负脉冲
+ * 若你的接收端仍不对时，可在此微调（例如 12 / 28 / 36）。 */
+#define BPC_PULSE_DUTY      20
+
 /* ---------- 板载蓝色 LED（GPIO8，低电平点亮） ---------- */
 #define LED_PIN             8
 #define LED_ACTIVE_LOW      1

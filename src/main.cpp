@@ -25,6 +25,7 @@
 #include <U8g2lib.h>
 #include <time.h>
 #include <sys/time.h>
+#include <Preferences.h>
 
 #include "config.h"
 #include "bpc.h"
@@ -62,12 +63,21 @@ static uint32_t btnDownMs    = 0;
 static String   g_ssid;   /* 当前使用的 Wi-Fi 凭据 */
 static String   g_pass;
 
+/* 负脉冲占空比：运行时可用 BOOT 短按调节，保存在 NVS */
+static const uint8_t PULSE_PRESETS[] = {0, 8, 12, 20, 28, 36, 48, 64};
+#define PULSE_PRESET_COUNT (sizeof(PULSE_PRESETS) / sizeof(PULSE_PRESETS[0]))
+static uint8_t  g_pulseDuty  = BPC_PULSE_DUTY;
+static uint8_t  g_pulseIdx   = 0;
+static char     g_toast[16]  = {0};
+static uint32_t g_toastUntil = 0;
+
 /* ------------------------------------------------------------- 前向声明 -- */
 static void maintainNet(uint32_t nowMs);
 static void maintainButton(uint32_t nowMs);
 static void signalTick();
 static void updateLed(uint32_t nowMs);
 static void provisionDisplay(const char* l1, const char* l2, const char* l3);
+static void cyclePulseDuty();
 
 /* ---------------------------------------------------------------- LED ---- */
 static inline void ledWrite(bool on)
@@ -105,6 +115,16 @@ static inline void carrierSilent()
     ledcWriteChannel(BPC_LEDC_CHANNEL, 0);
 #else
     ledcWrite(BPC_LEDC_CHANNEL, 0);
+#endif
+}
+
+/* 负脉冲：载波幅度降低到 g_pulseDuty（而非完全关断） */
+static inline void carrierPulse()
+{
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWriteChannel(BPC_LEDC_CHANNEL, g_pulseDuty);
+#else
+    ledcWrite(BPC_LEDC_CHANNEL, g_pulseDuty);
 #endif
 }
 
@@ -243,7 +263,7 @@ static void dmDrawCentered(int y, const char* s, int gap)
     dmDrawString(x, y, s, gap);
 }
 
-/* 两行点阵时间：第一行 时:分，第二行 秒 */
+/* 两行点阵时间：第一行 时:分，第二行 秒（或临时提示） */
 static void renderClock(const struct tm* t)
 {
     char hm[8];
@@ -256,8 +276,38 @@ static void renderClock(const struct tm* t)
 
     u8g2.clearBuffer();
     dmDrawCentered(OLED_OFF_Y, hm, gap);
-    dmDrawCentered(OLED_OFF_Y + DM_LINE_H + lineGap, ss, gap);
+    if (g_toast[0] && (int32_t)(millis() - g_toastUntil) < 0) {
+        u8g2.setFont(u8g2_font_4x6_tr);
+        int w = (int)u8g2.getStrWidth(g_toast);
+        int x = OLED_OFF_X + (OLED_W - w) / 2;
+        if (x < OLED_OFF_X) x = OLED_OFF_X;
+        u8g2.drawStr(x, OLED_OFF_Y + DM_LINE_H + lineGap + 12, g_toast);
+    } else {
+        dmDrawCentered(OLED_OFF_Y + DM_LINE_H + lineGap, ss, gap);
+    }
     u8g2.sendBuffer();
+}
+
+/* BOOT 短按：切换负脉冲深度（保存在 NVS），并临时显示当前值 */
+static void cyclePulseDuty()
+{
+    g_pulseIdx = (uint8_t)((g_pulseIdx + 1) % PULSE_PRESET_COUNT);
+    g_pulseDuty = PULSE_PRESETS[g_pulseIdx];
+
+    Preferences p;
+    p.begin("bpc", false);
+    p.putUChar("pulse", g_pulseDuty);
+    p.end();
+
+    snprintf(g_toast, sizeof(g_toast), "PULSE %d", (int)g_pulseDuty);
+    g_toastUntil = millis() + 3000;
+    Serial.printf("pulse duty -> %d (0=full off)\n", (int)g_pulseDuty);
+
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    struct tm t;
+    localtime_r(&tv.tv_sec, &t);
+    renderClock(&t);
 }
 
 /* =============================================================== setup === */
@@ -290,6 +340,19 @@ void setup()
     carrierInit();
     carrierSilent();
     Serial.printf("[init] BPC carrier %d Hz on GPIO%d\n", BPC_FREQ_HZ, BPC_PIN);
+
+    /* 载入已保存的负脉冲深度（可用 BOOT 短按现场调节） */
+    {
+        Preferences p;
+        p.begin("bpc", true);
+        g_pulseDuty = p.getUChar("pulse", BPC_PULSE_DUTY);
+        p.end();
+        g_pulseIdx = 0;
+        for (uint8_t i = 0; i < PULSE_PRESET_COUNT; ++i) {
+            if (PULSE_PRESETS[i] == g_pulseDuty) g_pulseIdx = i;
+        }
+        Serial.printf("[init] pulse duty = %d (0=full off)\n", (int)g_pulseDuty);
+    }
 
     /* Wi-Fi 配网 */
     wifiProvisionSetDisplay(provisionDisplay);
@@ -447,6 +510,13 @@ static void maintainButton(uint32_t nowMs)
             ESP.restart();
         }
     } else {
+        if (btnDownMs != 0) {
+            uint32_t held = (uint32_t)(nowMs - btnDownMs);
+            /* <0.6s：短按，切换负脉冲深度 */
+            if (held < 600) {
+                cyclePulseDuty();
+            }
+        }
         btnDownMs = 0;
         btnWasDown = false;
     }
@@ -477,7 +547,7 @@ static void signalTick()
             carrierOff = false;
         }
         if (offMs > 0) {
-            carrierSilent();                /* 整秒开始处的负脉冲 */
+            carrierPulse();                 /* 整秒开始处的负脉冲（降幅） */
             carrierOff = true;
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
         }
