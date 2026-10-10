@@ -36,7 +36,6 @@
 /* ---------- 板载蓝色 LED（GPIO8，低电平点亮） ---------- */
 #define LED_PIN             8
 #define LED_ACTIVE_LOW      1
-#define LED_LEDC_CHANNEL    1            /* 独立 LEDC 通道：可做半亮 / 跟随载波 */
 
 /* ---------- BOOT 按键（GPIO9），长按 1s 强制重新对时 ---------- */
 #define BOOT_BTN_PIN        9

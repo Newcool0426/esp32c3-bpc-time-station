@@ -48,6 +48,7 @@ static bool     carrierOff   = false; /* 当前是否处于负脉冲(关断)期 
 static uint32_t offUntilUs   = 0;
 
 static uint32_t lastWifiTry  = 0;
+static uint8_t  g_wifiRotate = 0;      /* 断线重连时轮换到的网络序号 */
 static uint32_t lastNtpPollMs  = 0;
 static uint32_t lastNtpForceMs = 0;
 static uint32_t lastHouseMs  = 0;
@@ -80,33 +81,13 @@ static void provisionDisplay(const char* l1, const char* l2, const char* l3);
 static void cyclePulseDuty();
 
 /* ---------------------------------------------------------------- LED ---- */
-/* LED 用独立 LEDC 通道驱动（与载波同为 68.5kHz），可做半亮 */
-static void ledPwmInit()
-{
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcAttachChannel(LED_PIN, BPC_FREQ_HZ, 8, LED_LEDC_CHANNEL);
-#else
-    ledcSetup(LED_LEDC_CHANNEL, BPC_FREQ_HZ, 8);
-    ledcAttachPin(LED_PIN, LED_LEDC_CHANNEL);
-#endif
-}
-
-static inline void ledDuty(uint8_t d)
-{
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcWriteChannel(LED_LEDC_CHANNEL, d);
-#else
-    ledcWrite(LED_LEDC_CHANNEL, d);
-#endif
-}
-
-/* 全亮 / 全灭（用于未授时的闪烁，以及授时后熄灭） */
+/* 普通 GPIO 驱动（不再占用 LEDC，避免与载波通道共用定时器） */
 static inline void ledWrite(bool on)
 {
 #if LED_ACTIVE_LOW
-    ledDuty(on ? 0 : 255);
+    digitalWrite(LED_PIN, on ? LOW : HIGH);
 #else
-    ledDuty(on ? 255 : 0);
+    digitalWrite(LED_PIN, on ? HIGH : LOW);
 #endif
 }
 
@@ -334,8 +315,8 @@ static void cyclePulseDuty()
 /* =============================================================== setup === */
 void setup()
 {
-    /* LED（独立 LEDC 通道，可半亮） */
-    ledPwmInit();
+    /* LED（普通 GPIO） */
+    pinMode(LED_PIN, OUTPUT);
     ledWrite(false);
 
     /* BOOT 按键 */
@@ -497,14 +478,20 @@ static void maintainNet(uint32_t nowMs)
         }
     } else {
         wifiUp = false;
-        /* 断线：每隔一段时间扫描并连接已知网络中信号最好的一组 */
+        /* 断线：非阻塞地轮换尝试已保存的网络（不扫描，避免打断授时 BPC） */
         if ((st == WL_DISCONNECTED || st == WL_CONNECT_FAILED ||
              st == WL_NO_SSID_AVAIL) &&
-            (uint32_t)(nowMs - lastWifiTry) > 30000) {
+            (uint32_t)(nowMs - lastWifiTry) > 12000) {
             lastWifiTry = nowMs;
-            Serial.println("WiFi reconnect: scanning known networks...");
-            String s, p;
-            wifiProvisionConnectAny(8000, s, p);
+            String ss[WIFI_MAX_NETS], pp[WIFI_MAX_NETS];
+            int n = wifiProvisionLoadList(ss, pp, WIFI_MAX_NETS);
+            if (n > 0) {
+                if (g_wifiRotate >= n) g_wifiRotate = 0;
+                Serial.printf("WiFi reconnect: try \"%s\"\n", ss[g_wifiRotate].c_str());
+                WiFi.mode(WIFI_STA);
+                WiFi.begin(ss[g_wifiRotate].c_str(), pp[g_wifiRotate].c_str());
+                g_wifiRotate = (uint8_t)((g_wifiRotate + 1) % n);
+            }
         }
     }
 }
