@@ -51,6 +51,7 @@
 #define OLED_OFF_Y          24
 #define OLED_W              72
 #define OLED_H              40
+#define OLED_RENDER_DELAY_MS 450   /* 屏幕在“整秒后 450ms”刷新，使秒数跳动均匀 */
 
 /* ---------- NTP ---------- */
 #define NTP_SERVER1         "ntp.aliyun.com"

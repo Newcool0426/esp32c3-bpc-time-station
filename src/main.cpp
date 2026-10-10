@@ -71,6 +71,7 @@ static uint32_t g_toastUntil = 0;
 
 static struct tm pendingTm;              /* 负脉冲结束后再刷新的时间 */
 static bool      pendingRender = false;
+static uint32_t  renderAtUs    = 0;      /* 屏幕刷新的固定时刻（本秒内） */
 
 /* ------------------------------------------------------------- 前向声明 -- */
 static void maintainNet(uint32_t nowMs);
@@ -563,20 +564,22 @@ static void signalTick()
             carrierPulse();                 /* 整秒开始处的负脉冲（降幅） */
             carrierOff = true;
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
-            pendingTm = t;                  /* 屏幕刷新延后到脉冲结束 */
-            pendingRender = true;
-        } else {
-            renderClock(&t);                /* 本秒无间隙，直接刷新 */
         }
+        /* 屏幕刷新固定在“整秒后 OLED_RENDER_DELAY_MS”这一时刻，
+         * 与负脉冲宽度无关，秒数跳动才均匀 */
+        pendingTm = t;
+        renderAtUs = nowUs + (uint32_t)OLED_RENDER_DELAY_MS * 1000;
+        pendingRender = true;
     }
 
     if (carrierOff && (int32_t)(nowUs - offUntilUs) >= 0) {
         carrierOn();
         carrierOff = false;
-        if (pendingRender) {
-            pendingRender = false;
-            renderClock(&pendingTm);
-        }
+    }
+
+    if (pendingRender && (int32_t)(nowUs - renderAtUs) >= 0) {
+        pendingRender = false;
+        renderClock(&pendingTm);
     }
 }
 
