@@ -100,28 +100,13 @@ static inline void ledDuty(uint8_t d)
 #endif
 }
 
-/* 全亮 / 全灭（用于未授时的闪烁） */
+/* 全亮 / 全灭（用于未授时的闪烁，以及授时后熄灭） */
 static inline void ledWrite(bool on)
 {
 #if LED_ACTIVE_LOW
     ledDuty(on ? 0 : 255);
 #else
     ledDuty(on ? 255 : 0);
-#endif
-}
-
-/* 授时中：跟随载波——满幅时半亮，负脉冲时全灭（同 bpcTransmitterEsp32） */
-static inline void ledMirrorCarrierOn()
-{
-    ledDuty(128);                 /* 50% 占空比 → 半亮 */
-}
-
-static inline void ledMirrorCarrierOff()
-{
-#if LED_ACTIVE_LOW
-    ledDuty(255);                 /* 低电平点亮：255=常高 → 灭 */
-#else
-    ledDuty(0);
 #endif
 }
 
@@ -488,6 +473,7 @@ static void maintainNet(uint32_t nowMs)
             time_t now = time(nullptr);
             if (now > 1600000000) {           /* 时间已由 SNTP 写入 */
                 timeValid = true;
+                ledWrite(false);              /* 授时后熄灭指示灯 */
                 struct tm t;
                 localtime_r(&now, &t);
                 bpc_encode(&t, bpcSym);       /* 预生成当前帧 */
@@ -592,9 +578,7 @@ static void signalTick()
             offUntilUs = nowUs + (uint32_t)offMs * 1000;
             pendingTm = t;                  /* 屏幕刷新延后到脉冲结束 */
             pendingRender = true;
-            ledMirrorCarrierOff();          /* 负脉冲：LED 灭（跟随载波） */
         } else {
-            ledMirrorCarrierOn();           /* 满幅载波：LED 半亮 */
             renderClock(&t);                /* 本秒无间隙，直接刷新 */
         }
     }
@@ -602,7 +586,6 @@ static void signalTick()
     if (carrierOff && (int32_t)(nowUs - offUntilUs) >= 0) {
         carrierOn();
         carrierOff = false;
-        ledMirrorCarrierOn();               /* 载波恢复：LED 半亮 */
         if (pendingRender) {
             pendingRender = false;
             renderClock(&pendingTm);
@@ -614,7 +597,7 @@ static void signalTick()
 static void updateLed(uint32_t nowMs)
 {
     if (timeValid) {
-        return;                 /* 授时中：LED 由 signalTick 跟随载波状态控制 */
+        return;                 /* 授时后指示灯熄灭，不再动作 */
     }
 
     /* 尚未授时：有网无时间=快闪(对时中)，无网=慢闪 */
